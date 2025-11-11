@@ -24,24 +24,12 @@ const parseHtmlToQuestions = (html: string): Question[] => {
 
   const processContent = (element: HTMLElement): string => {
     let content = '';
-    element.childNodes.forEach(node => {
-        if (node.nodeType === Node.TEXT_NODE) {
-            content += node.textContent;
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-            const elem = node as HTMLElement;
-            if (elem.tagName === 'SUP') {
-                content += '²'; 
-            } else if (elem.tagName === 'IMG') {
-            } else {
-                content += elem.innerHTML;
-            }
-        }
-    });
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = content;
+    tempDiv.innerHTML = element.innerHTML;
+    // Decode HTML entities to get the actual characters
     return tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
   };
-
+  
   const children = Array.from(container.children);
   let i = 0;
   while (i < children.length) {
@@ -140,8 +128,8 @@ const getImageDimensions = (imgSrc: string): Promise<{ width: number; height: nu
     });
 };
 
-const formatTextForExcel = (text: string) => {
-    return text.replace(/(\d+)\s*deg/g, '$1°');
+const formatTextForExcel = (text: string): string => {
+    return text.replace(/(\s)deg/g, '°').replace(/(\d)2/g, '$1²');
 };
 
 
@@ -150,16 +138,21 @@ export const convertDocxToExcel = async (file: File) => {
 
   const { value: rawHtml } = await mammoth.convertToHtml({ arrayBuffer }, {
     transformDocument: mammoth.transforms.paragraph(p => {
-        p.children = p.children.map(run => {
+        p.children.forEach(run => {
             if (run.type === 'run') {
-                run.children = run.children.map(text => {
+                run.children.forEach(text => {
                     if (text.type === 'text') {
                         text.value = text.value.replace(/°/g, ' deg');
                     }
-                    return text;
                 });
+                if (run.isSuperscript) {
+                    run.children.forEach(child => {
+                        if (child.type === 'text') {
+                           child.value = child.value;
+                        }
+                    });
+                }
             }
-            return run;
         });
         return p;
     })
@@ -225,6 +218,7 @@ export const convertDocxToExcel = async (file: File) => {
     const calculateCellHeight = async (cell: ExcelJS.Cell, text: string, images: {data: string, in: string}[]) => {
         const formattedText = formatTextForExcel(text);
         const lines = formattedText.split('\n');
+        // A rough estimate for text height in pixels
         const textHeightInPixels = lines.length * 16;
         
         let cumulativeImageHeight = 0;
@@ -239,22 +233,20 @@ export const convertDocxToExcel = async (file: File) => {
                   const imageWidthInPixels = 40; 
                   const imageHeightInPixels = (imageDims.height / imageDims.width) * imageWidthInPixels;
                   
-                  const rowOffsetInPixels = textHeightInPixels + cumulativeImageHeight + IMAGE_MARGIN_PIXELS;
+                  // Position image below text, adding margin
+                  const rowOffsetInPixels = textHeightInPixels + IMAGE_MARGIN_PIXELS;
                   cumulativeImageHeight += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
 
                   const colOffsetInPixels = 5;
                   
                   worksheet.addImage(imageId, {
-                    tl: { col: cell.col - 1 + (colOffsetInPixels / (cell.width as number * 7)), row: cell.row - 1 + (rowOffsetInPixels / (cell.height as number * 1.5)) },
+                    tl: { col: cell.col - 1, row: cell.row - 1 },
                     ext: { width: imageWidthInPixels, height: imageHeightInPixels }
                   });
                   
-                  const media = (worksheet as any).media;
-                  if (media && media.length > 0) {
-                    const lastImage = media[media.length - 1];
-                    lastImage.range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
-                    lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
-                  }
+                   // Manually adjust the top left offset using EMU
+                  (worksheet as any).media[ (worksheet as any).media.length - 1 ].range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
+                  (worksheet as any).media[ (worksheet as any).media.length - 1 ].range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
 
               } catch (e) { console.error("Could not add image", e); }
            }
