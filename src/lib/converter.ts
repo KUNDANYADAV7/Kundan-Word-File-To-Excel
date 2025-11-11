@@ -188,7 +188,7 @@ export const convertDocxToExcel = async (file: File) => {
             const imageId = workbook.addImage({ base64: data, extension });
             const imageDims = await getImageDimensions(imgData);
             
-            const imageWidth = 400; // Fixed width for question image
+            const imageWidth = 300; // Fixed width for question image
             const imageHeight = (imageDims.height / imageDims.width) * imageWidth;
 
             // Add a small margin before the image
@@ -222,14 +222,14 @@ export const convertDocxToExcel = async (file: File) => {
                     const imageId = workbook.addImage({ base64: data, extension });
                     const imageDims = await getImageDimensions(imgData);
 
-                    const imageWidth = 220; // Fixed width for option images
+                    const imageWidth = 180; // Fixed width for option images
                     const imageHeight = (imageDims.height / imageDims.width) * imageWidth;
                     
                     const textHeight = (optionsMap[letter] || '').split('\n').length * DEFAULT_ROW_HEIGHT;
                     const imageTopMargin = 5;
 
                     worksheet.addImage(imageId, {
-                        tl: { col: 2 + i, row: row.number - 1, rowOff: (textHeight + imageTopMargin) * PIXELS_TO_EMUS, colOff: 5 * PIXELS_TOEMUS },
+                        tl: { col: 2 + i, row: row.number - 1, rowOff: (textHeight + imageTopMargin) * PIXELS_TO_EMUS, colOff: 5 * PIXELS_TO_EMUS },
                         ext: { width: imageWidth, height: imageHeight }
                     });
                     maxOptionImageHeight = Math.max(maxOptionImageHeight, textHeight + imageHeight + imageTopMargin + 5);
