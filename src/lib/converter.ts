@@ -43,24 +43,28 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         const optionRegex = /^\s*\([A-D]\)\s*/i;
 
         if (questionStartRegex.test(nextText)) {
-          break; // Next question found, stop processing options for the current one
+          break; // Next question found
         }
 
         if (nextEl.tagName === 'P') {
             if (optionRegex.test(nextText)) {
-              questionData.options.push(nextText);
-              const optionImg = nextEl.querySelector('img');
-              if (optionImg?.src) {
-                // associate image with the last added option
-                questionData.images.push({ data: optionImg.src, in: `option${questionData.options.length}` });
+              // Split options that are on the same line
+              const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
+              for(const opt of sameLineOptions) {
+                if(optionRegex.test(opt)) {
+                  questionData.options.push(opt);
+                   const optionImg = nextEl.querySelector('img');
+                  if (optionImg?.src) {
+                    // This is imperfect for multiple images in one P tag, but will do for now
+                    questionData.images.push({ data: optionImg.src, in: `option${questionData.options.length}` });
+                  }
+                }
               }
             } else if (nextText) { // continuation of previous line
                 if(questionData.options.length > 0) {
-                    // Belongs to the last option
                     const lastOptionIndex = questionData.options.length - 1;
                     questionData.options[lastOptionIndex] += '\n' + nextText;
                 } else {
-                    // Belongs to the question
                     questionData.questionText += '\n' + nextText;
                 }
             }
@@ -68,8 +72,8 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         
         const nextElImgs = nextEl.querySelectorAll('img');
         nextElImgs.forEach(img => {
-            if (img.src) {
-                if (questionData.options.length > 0) {
+            if (img.src && !questionData.images.some(existingImg => existingImg.data === img.src)) {
+                 if (questionData.options.length > 0) {
                     questionData.images.push({ data: img.src, in: `option${questionData.options.length}` });
                 } else {
                     questionData.images.push({ data: img.src, in: 'question' });
@@ -109,9 +113,13 @@ export const convertDocxToExcel = async (file: File) => {
   const worksheet = workbook.addWorksheet('Questions');
 
   worksheet.columns = [
-    { header: 'Sr. No', key: 'sr', width: 10 },
-    { header: 'Question content', key: 'question', width: 70 },
-    { header: 'Alternatives', key: 'alternatives', width: 70 },
+    { header: 'Sr. No', key: 'sr', width: 8 },
+    { header: 'Question content', key: 'question', width: 50 },
+    { header: 'Image', key: 'image', width: 40 },
+    { header: 'Alternative1', key: 'alt1', width: 30 },
+    { header: 'Alternative2', key: 'alt2', width: 30 },
+    { header: 'Alternative3', key: 'alt3', width: 30 },
+    { header: 'Alternative4', key: 'alt4', width: 30 },
   ];
 
   const headerRow = worksheet.getRow(1);
@@ -120,55 +128,82 @@ export const convertDocxToExcel = async (file: File) => {
   headerRow.fill = {
     type: 'pattern',
     pattern: 'solid',
-    fgColor: { argb: 'FF4F81BD' }, // A nice blue
+    fgColor: { argb: 'FF4F81BD' },
   };
 
   let currentRowNum = 2;
   for (const [index, q] of questions.entries()) {
     
-    const row = worksheet.addRow({
+    const rowData: any = {
       sr: index + 1,
       question: q.questionText,
-      alternatives: q.options.join('\n\n'),
+    };
+
+    const cleanOption = (text: string) => text.replace(/^\s*\([A-D]\)\s*/i, '').trim();
+
+    q.options.forEach((opt, i) => {
+        rowData[`alt${i+1}`] = cleanOption(opt);
     });
 
+    const row = worksheet.addRow(rowData);
     row.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
     
-    let questionTextLines = q.questionText.split('\n').length;
-    let alternativesTextLines = q.options.join('\n\n').split('\n').length;
-    let textLines = Math.max(questionTextLines, alternativesTextLines);
-    let rowHeight = textLines * 15 + 10;
+    let maxLines = q.questionText.split('\n').length;
+    q.options.forEach(opt => {
+        maxLines = Math.max(maxLines, opt.split('\n').length);
+    });
+
+    let rowHeight = maxLines * 15 + 10;
     
     const questionImages = q.images.filter(img => img.in === 'question');
-    if (questionImages.length > 0) {
-      rowHeight += (questionImages.length * 160); // 150 for image, 10 for padding
-    }
-
-    const optionImages = q.images.filter(img => img.in.startsWith('option'));
-    if(optionImages.length > 0) {
-        let optionsHeight = 0;
-        // This is a rough estimation.
-        optionsHeight = q.options.length * 20 + optionImages.length * 160;
-        rowHeight = Math.max(rowHeight, optionsHeight);
-    }
-    
-    row.height = rowHeight;
+    let imageAdded = false;
 
     if (questionImages.length > 0) {
-      const img = questionImages[0]; // Assuming one image per question for now
+      const img = questionImages[0];
       if (img.data) {
         const base64string = img.data;
-        const extension = base64string.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
-        const base64Data = base64string.substring(base64string.indexOf(',') + 1);
-        const imageId = workbook.addImage({ base64: base64Data, extension });
-        
-        worksheet.addImage(imageId, {
-          tl: { col: 1.05, row: currentRowNum -1 + (questionTextLines * 0.5) }, // Place below text
-          ext: { width: 300, height: 150 }
-        });
+        try {
+            const extension = base64string.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
+            const base64Data = base64string.substring(base64string.indexOf(',') + 1);
+            const imageId = workbook.addImage({ base64: base64Data, extension });
+            
+            worksheet.addImage(imageId, {
+              tl: { col: 2, row: currentRowNum - 1 }, // Column C for Image
+              ext: { width: 300, height: 225 }
+            });
+            imageAdded = true;
+            rowHeight = Math.max(rowHeight, 235); // 225 for image + 10 padding
+        } catch (e) {
+            console.error("Could not add image", e);
+        }
       }
     }
     
+    // Add images for options in their respective columns if any
+    for(let i=0; i<4; i++){
+      const optionImages = q.images.filter(img => img.in === `option${i+1}`);
+      if(optionImages.length > 0){
+        const img = optionImages[0];
+        if (img.data) {
+           const base64string = img.data;
+            try {
+              const extension = base64string.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
+              const base64Data = base64string.substring(base64string.indexOf(',') + 1);
+              const imageId = workbook.addImage({ base64: base64Data, extension });
+
+              worksheet.addImage(imageId, {
+                tl: { col: 3 + i, row: currentRowNum - 1 }, // Columns D, E, F, G
+                ext: { width: 150, height: 112.5 }
+              });
+              rowHeight = Math.max(rowHeight, 122.5); // 112.5 for image + 10 padding
+            } catch (e) {
+                console.error(`Could not add image for option ${i+1}`, e);
+            }
+        }
+      }
+    }
+    
+    row.height = rowHeight;
     currentRowNum = worksheet.rowCount + 1;
   }
   
@@ -189,3 +224,4 @@ export const convertDocxToExcel = async (file: File) => {
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   saveAs(blob, `${file.name.replace(/\.docx$/, '')}.xlsx`);
 };
+    
