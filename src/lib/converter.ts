@@ -43,24 +43,18 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         const optionRegex = /^\s*\([A-D]\)\s*/i;
 
         if (questionStartRegex.test(nextText)) {
-          break; // Next question found
+          break; 
         }
 
         if (nextEl.tagName === 'P') {
             if (optionRegex.test(nextText)) {
-              // Split options that are on the same line
               const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
               for(const opt of sameLineOptions) {
                 if(optionRegex.test(opt)) {
                   questionData.options.push(opt);
-                   const optionImg = nextEl.querySelector('img');
-                  if (optionImg?.src) {
-                    // This is imperfect for multiple images in one P tag, but will do for now
-                    questionData.images.push({ data: optionImg.src, in: `option${questionData.options.length}` });
-                  }
                 }
               }
-            } else if (nextText) { // continuation of previous line
+            } else if (nextText) { 
                 if(questionData.options.length > 0) {
                     const lastOptionIndex = questionData.options.length - 1;
                     questionData.options[lastOptionIndex] += '\n' + nextText;
@@ -74,9 +68,11 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         nextElImgs.forEach(img => {
             if (img.src && !questionData.images.some(existingImg => existingImg.data === img.src)) {
                  if (questionData.options.length > 0) {
-                    const optionLabel = questionData.options[questionData.options.length - 1].match(/^\s*\(([A-D])\)/i);
-                    if(optionLabel){
-                        questionData.images.push({ data: img.src, in: `option${optionLabel[1].toUpperCase()}` });
+                    const lastOption = questionData.options[questionData.options.length - 1];
+                    const optionLabelMatch = lastOption.match(/^\s*\(([A-D])\)/i);
+                    if(optionLabelMatch){
+                        const optionLetter = optionLabelMatch[1].toUpperCase();
+                        questionData.images.push({ data: img.src, in: `option${optionLetter}` });
                     }
                 } else {
                     questionData.images.push({ data: img.src, in: 'question' });
@@ -100,12 +96,27 @@ const parseHtmlToQuestions = (html: string): Question[] => {
   return questions;
 };
 
+const PIXELS_TO_EMUS = 9525;
+const DEFAULT_ROW_HEIGHT = 15; // Corresponds to font size 12
+
+const getBase64Image = (imgSrc: string): { extension: 'png' | 'jpeg', data: string } => {
+    const extension = imgSrc.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
+    const data = imgSrc.substring(imgSrc.indexOf(',') + 1);
+    return { extension, data };
+}
+
+const getImageDimensions = (imgSrc: string): Promise<{ width: number; height: number }> => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.width, height: img.height });
+        img.onerror = reject;
+        img.src = imgSrc;
+    });
+};
 
 export const convertDocxToExcel = async (file: File) => {
   const arrayBuffer = await file.arrayBuffer();
-
   const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
-
   const questions = parseHtmlToQuestions(html);
 
   if (questions.length === 0) {
@@ -118,28 +129,23 @@ export const convertDocxToExcel = async (file: File) => {
   worksheet.columns = [
     { header: 'Sr. No', key: 'sr', width: 8 },
     { header: 'Question content', key: 'question', width: 60 },
-    { header: 'Alternative1', key: 'alt1', width: 30 },
-    { header: 'Alternative2', key: 'alt2', width: 30 },
-    { header: 'Alternative3', key: 'alt3', width: 30 },
-    { header: 'Alternative4', key: 'alt4', width: 30 },
+    { header: 'Alternative1', key: 'alt1', width: 35 },
+    { header: 'Alternative2', key: 'alt2', width: 35 },
+    { header: 'Alternative3', key: 'alt3', width: 35 },
+    { header: 'Alternative4', key: 'alt4', width: 35 },
   ];
 
   const headerRow = worksheet.getRow(1);
-  headerRow.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+  headerRow.font = { name: 'Calibri', bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
   headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
   headerRow.fill = {
     type: 'pattern',
     pattern: 'solid',
     fgColor: { argb: 'FF4F81BD' },
   };
+  headerRow.height = 20;
 
-  let currentRowNum = 2;
   for (const [index, q] of questions.entries()) {
-    const rowData: any = {
-      sr: index + 1,
-      question: q.questionText,
-    };
-
     const cleanOption = (text: string) => text.replace(/^\s*\([A-D]\)\s*/i, '').trim();
 
     const optionsMap: {[key: string]: string} = {};
@@ -151,80 +157,95 @@ export const convertDocxToExcel = async (file: File) => {
         }
     });
 
-    rowData['alt1'] = optionsMap['A'] || '';
-    rowData['alt2'] = optionsMap['B'] || '';
-    rowData['alt3'] = optionsMap['C'] || '';
-    rowData['alt4'] = optionsMap['D'] || '';
+    const row = worksheet.addRow({
+      sr: index + 1,
+      question: q.questionText,
+      alt1: optionsMap['A'] || '',
+      alt2: optionsMap['B'] || '',
+      alt3: optionsMap['C'] || '',
+      alt4: optionsMap['D'] || '',
+    });
     
-    const row = worksheet.addRow(rowData);
-    row.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+    // Default alignment and font for all cells in the row
+    row.eachCell({ includeEmpty: true }, cell => {
+        cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+        cell.font = { name: 'Calibri', size: 11 };
+    });
+
+    let maxRowHeight = 0;
     
-    const questionTextLineCount = q.questionText.split('\n').length;
-    // Estimate height based on text lines. 15px per line.
-    let cumulativeHeight = (questionTextLineCount * 15) + 10; // +10 for padding
+    // --- Calculate height for Question Cell ---
+    let questionCellHeight = 0;
+    const questionTextLines = q.questionText.split('\n').length;
+    questionCellHeight += questionTextLines * DEFAULT_ROW_HEIGHT;
 
     const questionImages = q.images.filter(img => img.in === 'question');
     if (questionImages.length > 0) {
-      const img = questionImages[0];
-      if (img.data) {
+      const imgData = questionImages[0].data;
+      if (imgData) {
         try {
-            const base64string = img.data;
-            const extension = base64string.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
-            const base64Data = base64string.substring(base64string.indexOf(',') + 1);
-            const imageId = workbook.addImage({ base64: base64Data, extension });
+            const { extension, data } = getBase64Image(imgData);
+            const imageId = workbook.addImage({ base64: data, extension });
+            const imageDims = await getImageDimensions(imgData);
             
-            const imageHeight = 225;
-            // rowOff is in pixels.
-            const rowOff = cumulativeHeight;
+            const imageWidth = 400; // Fixed width for question image
+            const imageHeight = (imageDims.height / imageDims.width) * imageWidth;
+
+            // Add a small margin before the image
+            const imageTopMargin = 5; 
+            const textHeight = questionTextLines * DEFAULT_ROW_HEIGHT;
+
             worksheet.addImage(imageId, {
-              tl: { col: 1, row: currentRowNum - 1, rowOff: rowOff, colOff: 5 * 9525 / 914400 }, // Column B, offset from top
-              ext: { width: 300, height: imageHeight }
+              tl: { col: 1, row: row.number - 1, rowOff: (textHeight + imageTopMargin) * PIXELS_TO_EMUS, colOff: 5 * PIXELS_TO_EMUS },
+              ext: { width: imageWidth, height: imageHeight }
             });
-            cumulativeHeight += imageHeight + 10; // Add image height and padding
-        } catch (e) {
-            console.error("Could not add question image", e);
-        }
+            questionCellHeight += imageHeight + imageTopMargin + 5; // add bottom margin
+        } catch (e) { console.error("Could not add question image", e); }
       }
     }
-    
-    let maxOptionHeight = 0;
-     // Add images for options in their respective columns
-    ['A', 'B', 'C', 'D'].forEach((letter, i) => {
-        const optionImages = q.images.filter(img => img.in === `option${letter}`);
-        if(optionImages.length > 0){
-            const img = optionImages[0];
-            if (img.data) {
-               const base64string = img.data;
-                try {
-                  const extension = base64string.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
-                  const base64Data = base64string.substring(base64string.indexOf(',') + 1);
-                  const imageId = workbook.addImage({ base64: base64Data, extension });
+    maxRowHeight = Math.max(maxRowHeight, questionCellHeight);
 
-                  worksheet.addImage(imageId, {
-                    tl: { col: 2 + i, row: currentRowNum - 1 }, // Columns C, D, E, F
-                    ext: { width: 150, height: 112.5 }
-                  });
-                  maxOptionHeight = Math.max(maxOptionHeight, 112.5 + 10);
-                } catch (e) {
-                    console.error(`Could not add image for option ${letter}`, e);
-                }
+    // --- Calculate height for Option Cells ---
+    let maxOptionHeight = 0;
+    const allOptionTexts = [optionsMap['A']||'', optionsMap['B']||'', optionsMap['C']||'', optionsMap['D']||''];
+    const maxOptionTextLines = Math.max(...allOptionTexts.map(t => t.split('\n').length));
+    maxOptionHeight += maxOptionTextLines * DEFAULT_ROW_HEIGHT;
+
+    let maxOptionImageHeight = 0;
+    for (const [i, letter] of ['A', 'B', 'C', 'D'].entries()) {
+        const optionImages = q.images.filter(img => img.in === `option${letter}`);
+        if(optionImages.length > 0) {
+            const imgData = optionImages[0].data;
+            if (imgData) {
+                try {
+                    const { extension, data } = getBase64Image(imgData);
+                    const imageId = workbook.addImage({ base64: data, extension });
+                    const imageDims = await getImageDimensions(imgData);
+
+                    const imageWidth = 220; // Fixed width for option images
+                    const imageHeight = (imageDims.height / imageDims.width) * imageWidth;
+                    
+                    const textHeight = (optionsMap[letter] || '').split('\n').length * DEFAULT_ROW_HEIGHT;
+                    const imageTopMargin = 5;
+
+                    worksheet.addImage(imageId, {
+                        tl: { col: 2 + i, row: row.number - 1, rowOff: (textHeight + imageTopMargin) * PIXELS_TO_EMUS, colOff: 5 * PIXELS_TOEMUS },
+                        ext: { width: imageWidth, height: imageHeight }
+                    });
+                    maxOptionImageHeight = Math.max(maxOptionImageHeight, textHeight + imageHeight + imageTopMargin + 5);
+                } catch (e) { console.error(`Could not add image for option ${letter}`, e); }
             }
         }
-    });
+    }
+    maxOptionHeight = Math.max(maxOptionHeight, maxOptionImageHeight);
+    maxRowHeight = Math.max(maxRowHeight, maxOptionHeight);
 
-    const optionsLineCount = Math.max(
-      ...Object.values(optionsMap).map(opt => opt.split('\n').length), 0
-    );
-    maxOptionHeight = Math.max(maxOptionHeight, (optionsLineCount * 15) + 10);
-    
-    row.height = Math.max(cumulativeHeight, maxOptionHeight);
-    currentRowNum = worksheet.rowCount + 1;
+    row.height = maxRowHeight > 0 ? maxRowHeight : DEFAULT_ROW_HEIGHT * Math.max(questionTextLines, maxOptionTextLines, 1);
   }
   
-  const totalRows = worksheet.rowCount;
-  for (let i = 1; i <= totalRows; i++) {
-    const row = worksheet.getRow(i);
-    row.eachCell({ includeEmpty: true }, (cell) => {
+  // Apply borders to all cells
+  worksheet.eachRow({ includeEmpty: true }, function(row, rowNumber) {
+    row.eachCell({ includeEmpty: true }, function(cell, colNumber) {
       cell.border = {
         top: { style: 'thin' },
         left: { style: 'thin' },
@@ -232,10 +253,9 @@ export const convertDocxToExcel = async (file: File) => {
         right: { style: 'thin' },
       };
     });
-  }
+  });
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   saveAs(blob, `${file.name.replace(/\.docx$/, '')}.xlsx`);
 };
-    
