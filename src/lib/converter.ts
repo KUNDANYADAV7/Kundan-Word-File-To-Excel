@@ -26,8 +26,19 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     let content = '';
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = element.innerHTML;
+    
+    // Handle superscripts like cm²
+    tempDiv.querySelectorAll('sup').forEach(sup => {
+      if (sup.textContent === '2') {
+        sup.textContent = '²';
+      }
+    });
+
     // Decode HTML entities to get the actual characters
-    return tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
+    let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
+    // Replace placeholder for degree symbol
+    text = text.replace(/ deg/g, '°');
+    return text;
   };
   
   const children = Array.from(container.children);
@@ -129,7 +140,7 @@ const getImageDimensions = (imgSrc: string): Promise<{ width: number; height: nu
 };
 
 const formatTextForExcel = (text: string): string => {
-    return text.replace(/(\s)deg/g, '°').replace(/(\d)2/g, '$1²');
+    return text;
 };
 
 
@@ -140,18 +151,20 @@ export const convertDocxToExcel = async (file: File) => {
     transformDocument: mammoth.transforms.paragraph(p => {
         p.children.forEach(run => {
             if (run.type === 'run') {
-                run.children.forEach(text => {
-                    if (text.type === 'text') {
-                        text.value = text.value.replace(/°/g, ' deg');
-                    }
-                });
                 if (run.isSuperscript) {
-                    run.children.forEach(child => {
-                        if (child.type === 'text') {
-                           child.value = child.value;
+                    run.children.forEach(text => {
+                        if (text.type === 'text' && text.value === '2') {
+                           // This is a simple transform, might need to be more robust
+                           // For now, let's keep it simple
                         }
                     });
                 }
+                run.children.forEach(text => {
+                    if (text.type === 'text') {
+                        // Replace degree symbol with a placeholder text to avoid conversion issues
+                        text.value = text.value.replace(/°/g, ' deg');
+                    }
+                });
             }
         });
         return p;
@@ -218,8 +231,13 @@ export const convertDocxToExcel = async (file: File) => {
     const calculateCellHeight = async (cell: ExcelJS.Cell, text: string, images: {data: string, in: string}[]) => {
         const formattedText = formatTextForExcel(text);
         const lines = formattedText.split('\n');
-        // A rough estimate for text height in pixels
-        const textHeightInPixels = lines.length * 16;
+        
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if(!context) return 0;
+        context.font = "11pt Calibri";
+        const textMetrics = context.measureText(formattedText);
+        const textHeightInPixels = (textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent) * lines.length;
         
         let cumulativeImageHeight = 0;
 
@@ -230,10 +248,9 @@ export const convertDocxToExcel = async (file: File) => {
                   const imageId = workbook.addImage({ base64: data, extension });
                   const imageDims = await getImageDimensions(imgData.data);
                   
-                  const imageWidthInPixels = 40; 
+                  const imageWidthInPixels = 100;
                   const imageHeightInPixels = (imageDims.height / imageDims.width) * imageWidthInPixels;
                   
-                  // Position image below text, adding margin
                   const rowOffsetInPixels = textHeightInPixels + IMAGE_MARGIN_PIXELS;
                   cumulativeImageHeight += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
 
