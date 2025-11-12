@@ -66,16 +66,22 @@ export default function Home() {
         result = await convertPdfToExcel(file);
       }
 
-      if (result) {
+      if (result && result.questions.length > 0) {
         setPreviewData(result);
         setIsPreviewOpen(true);
+         toast({
+          title: "Conversion Successful!",
+          description: "Your preview is ready.",
+          action: <CheckCircle className="text-green-500" />,
+        });
+      } else {
+         toast({
+            variant: "destructive",
+            title: "Conversion Failed",
+            description: "No questions could be extracted. Please check the document format.",
+        });
       }
       
-      toast({
-        title: "Conversion Successful!",
-        description: "Your preview is ready.",
-        action: <CheckCircle className="text-green-500" />,
-      });
     } catch (error) {
       console.error(error);
       const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";

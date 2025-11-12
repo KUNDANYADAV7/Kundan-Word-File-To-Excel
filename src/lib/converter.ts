@@ -4,7 +4,6 @@ import mammoth from 'mammoth';
 import * as ExcelJS from 'exceljs';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Set workerSrc to a CDN URL to avoid build issues with Next.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 export type Question = {
@@ -19,130 +18,124 @@ const POINTS_TO_PIXELS = 4 / 3;
 const IMAGE_MARGIN_PIXELS = 15;
 
 const parseHtmlToQuestions = (html: string): Question[] => {
-  const questions: Question[] = [];
-  if (typeof window === 'undefined') return questions;
+    const questions: Question[] = [];
+    if (typeof window === 'undefined') return questions;
 
-  const container = document.createElement('div');
-  container.innerHTML = html;
+    const container = document.createElement('div');
+    container.innerHTML = html;
 
-  const processTextContent = (element: HTMLElement): string => {
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = element.innerHTML;
-    tempDiv.querySelectorAll('sup').forEach(sup => {
-      if (sup.textContent === '2') sup.textContent = '²';
-    });
-    tempDiv.querySelectorAll('img').forEach(img => img.remove());
-    let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
-    text = text.replace(/ deg/g, '°');
-    return text;
-  };
-  
-  const children = Array.from(container.children);
-  let i = 0;
-  while (i < children.length) {
-    const el = children[i] as HTMLElement;
-    const text = processTextContent(el);
-    const questionStartRegex = /^(?:Q|Question)?\s*\d+[.)]\s*/;
-    
-    if (el.tagName === 'P' && questionStartRegex.test(text)) {
-      const currentQuestion: Question = {
-        questionText: text.replace(questionStartRegex, ''),
-        options: {},
-        images: [],
-      };
+    const processTextContent = (element: HTMLElement): string => {
+        let text = element.textContent?.replace(/\s+/g, ' ').trim() || '';
+        return text;
+    };
 
-      const questionImages = Array.from(el.querySelectorAll('img'));
-      let questionHasOptionInSameLine = /\([A-D]\)/i.test(el.textContent || "");
+    const children = Array.from(container.children);
+    let i = 0;
+    while (i < children.length) {
+        const el = children[i] as HTMLElement;
+        const text = processTextContent(el);
+        const questionStartRegex = /^(?:Q|Question)?\s*\d+[.)]\s*/i;
 
-      if (!questionHasOptionInSameLine) {
-        questionImages.forEach(img => {
-          if(img.src && !currentQuestion.images.some(existing => existing.data === img.src)) {
-            currentQuestion.images.push({ data: img.src, in: 'question' });
-          }
-        });
-      }
+        if (el.tagName === 'P' && questionStartRegex.test(text)) {
+            let currentQuestion: Question = {
+                questionText: text.replace(questionStartRegex, ''),
+                options: {},
+                images: [],
+            };
 
-      let j = i;
-      let lastOptionLetter: string | null = null;
-      let isOptionLine = false;
+            const questionImages = Array.from(el.querySelectorAll('img'));
+            questionImages.forEach(img => {
+                if (img.src && !text.match(/\([A-D]\)/i)) {
+                    currentQuestion.images.push({ data: img.src, in: 'question' });
+                }
+            });
 
-      const processParagraph = (pEl: HTMLElement) => {
-        const nextText = processTextContent(pEl);
-        const optionRegex = /\s*\(([A-D])\)\s*/i;
-
-        const pImages = Array.from(pEl.querySelectorAll('img'));
-        
-        isOptionLine = false;
-        const parts = nextText.split(/\s*(?=\([B-D]\))/i);
-        const optionMatchInLine = nextText.match(optionRegex);
-        
-        if (optionMatchInLine && optionMatchInLine[1]) {
-            isOptionLine = true;
-            const sameLineOptions = nextText.split(/\s*(?=\([A-D]\))/i);
-            for(const opt of sameLineOptions) {
-              const optionMatch = opt.match(optionRegex);
-              if(optionMatch && optionMatch[1]) {
-                const letter = optionMatch[1].toUpperCase();
-                const optionText = opt.replace(optionRegex, '').trim();
-                currentQuestion.options[letter] = ((currentQuestion.options[letter] || '') + ' ' + optionText).trim();
-                lastOptionLetter = letter;
+            // Handle options that are on the same line as the question
+            const sameLineOptionsRegex = /(\([A-D]\)\s*.*?)(?=\s*\([A-D]\)|$)/gi;
+            let match;
+            while ((match = sameLineOptionsRegex.exec(el.innerHTML)) !== null) {
+                const partContainer = document.createElement('div');
+                partContainer.innerHTML = match[1];
+                const optionText = processTextContent(partContainer);
+                const optionMarkerMatch = optionText.match(/^\(([A-D])\)/i);
                 
-                const imgInParentP = pEl.innerHTML.includes(optionMatch[0]);
-                if (imgInParentP && pImages.length > 0) {
-                    pImages.forEach(img => {
-                        if (img.src && !currentQuestion.images.some(existing => existing.data === img.src)) {
+                if (optionMarkerMatch) {
+                    const letter = optionMarkerMatch[1].toUpperCase();
+                    currentQuestion.options[letter] = (currentQuestion.options[letter] || '') + optionText.substring(3).trim();
+
+                    partContainer.querySelectorAll('img').forEach(img => {
+                        if (img.src) {
                             currentQuestion.images.push({ data: img.src, in: `option${letter}` });
                         }
                     });
                 }
-              }
             }
-        } else if (nextText && lastOptionLetter) {
-            currentQuestion.options[lastOptionLetter] += '\n' + nextText;
-        } else if (j > i) { 
-            currentQuestion.questionText += '\n' + nextText;
-        }
 
-        if (isOptionLine && pImages.length > 0 && lastOptionLetter) {
-           pImages.forEach(img => {
-              if (img.src && !currentQuestion.images.some(existing => existing.data === img.src)) {
-                 if (!currentQuestion.images.some(imgStored => imgStored.in.startsWith('option'))){
-                    currentQuestion.images.push({ data: img.src, in: `option${lastOptionLetter}` });
-                 }
-              }
-           });
-        }
-      };
 
-      if (j === i) {
-          processParagraph(el);
-          j++;
-      }
+            let j = i + 1;
+            while (j < children.length) {
+                const nextEl = children[j] as HTMLElement;
+                const nextText = processTextContent(nextEl);
 
-      while (j < children.length) {
-        const nextEl = children[j] as HTMLElement;
-        const nextText = processTextContent(nextEl);
-        
-        if (nextEl.tagName === 'P' && questionStartRegex.test(nextText)) {
-          break; 
-        }
+                if (nextEl.tagName === 'P' && questionStartRegex.test(nextText)) {
+                    break;
+                }
 
-        if (nextEl.tagName === 'P') {
-          processParagraph(nextEl);
+                if (nextEl.tagName === 'P') {
+                    const optionRegex = /\(([A-D])\)/i;
+                    const parts = nextEl.innerHTML.split(/(?=\<img)/g).map(part => {
+                        const div = document.createElement('div');
+                        div.innerHTML = part;
+                        return div;
+                    });
+
+                    let lastOptionLetter: string | null = null;
+                    parts.forEach(partEl => {
+                        const partText = processTextContent(partEl);
+                        const optionMatch = partText.match(optionRegex);
+                        
+                        if (optionMatch) {
+                            const optionsInPart = partText.split(/\s*(?=\([A-D]\))/i);
+                            optionsInPart.forEach(optStr => {
+                                const optMatch = optStr.match(/^\s*\(([A-D])\)/i);
+                                if(optMatch) {
+                                    lastOptionLetter = optMatch[1].toUpperCase();
+                                    currentQuestion.options[lastOptionLetter] = (currentQuestion.options[lastOptionLetter] || '') + optStr.replace(optMatch[0], '').trim();
+                                }
+                            });
+                        } else if(lastOptionLetter) {
+                             currentQuestion.options[lastOptionLetter] += ' ' + partText;
+                        }
+
+                        partEl.querySelectorAll('img').forEach(img => {
+                            if (img.src) {
+                                if(lastOptionLetter){
+                                    currentQuestion.images.push({ data: img.src, in: `option${lastOptionLetter}` });
+                                } else {
+                                     // If no option context, assume it belongs to the question
+                                     if(!currentQuestion.images.some(existing => existing.data === img.src)) {
+                                        currentQuestion.images.push({ data: img.src, in: 'question' });
+                                     }
+                                }
+                            }
+                        });
+                    });
+                } else {
+                     // If it's not a paragraph, it might be a list or table containing more question content.
+                     currentQuestion.questionText += '\n' + nextText;
+                }
+                j++;
+            }
+
+            if (currentQuestion.questionText || Object.keys(currentQuestion.options).length > 0 || currentQuestion.images.length > 0) {
+                questions.push(currentQuestion);
+            }
+            i = j;
+        } else {
+            i++;
         }
-        j++;
-      }
-      
-      if (currentQuestion.questionText || Object.keys(currentQuestion.options).length > 0 || currentQuestion.images.length > 0) {
-        questions.push(currentQuestion);
-      }
-      i = j;
-    } else {
-      i++;
     }
-  }
-
-  return questions;
+    return questions;
 };
 
 const getBase64Image = (imgSrc: string): { extension: 'png' | 'jpeg', data: string } => {
@@ -315,22 +308,6 @@ export const convertDocxToExcel = async (file: File): Promise<{ questions: Quest
 
   const { value: rawHtml } = await mammoth.convertToHtml({ arrayBuffer }, {
       transformDocument: mammoth.transforms.paragraph(p => {
-          p.children.forEach(run => {
-              if (run.type === 'run') {
-                  if (run.isSuperscript) {
-                       run.children.forEach(text => {
-                          if (text.type === 'text' && text.value === '2') {
-                             text.value = '²';
-                          }
-                      });
-                  }
-                  run.children.forEach(text => {
-                      if (text.type === 'text') {
-                          text.value = text.value.replace(/°/g, ' deg');
-                      }
-                  });
-              }
-          });
           return p;
       })
     });
@@ -349,49 +326,48 @@ export const convertPdfToExcel = async (file: File): Promise<{ questions: Questi
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    const viewport = page.getViewport({ scale: 1.0 });
+    const viewport = page.getViewport({ scale: 1.5 }); // Increased scale for better coordinate precision
     const ops = await page.getOperatorList();
-    const fn = ops.fnArray;
-    const args = ops.argsArray;
-
-    let imageYCoords: { [key: string]: number } = {};
+    
     const imagePromises: Promise<any>[] = [];
+    let imageYCoords: { [key: string]: {y: number, x: number} } = {};
 
-    for (let i = 0; i < fn.length; i++) {
-        if (fn[i] === pdfjsLib.OPS.paintImageXObject) {
-            const imgKey = args[i][0];
+    for (let i = 0; i < ops.fnArray.length; i++) {
+        if (ops.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
+            const imgKey = ops.argsArray[i][0];
             const promise = page.objs.get(imgKey).then((img: any) => {
-                if (img) {
-                    const transform = page.transform(viewport.transform, ops.transformMatrix);
-                    const y = transform[5];
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    if (ctx) {
-                        const imgData = ctx.createImageData(img.width, img.height);
-                        if (img.data.length === img.width * img.height * 4) { // RGBA
-                            imgData.data.set(img.data);
-                        } else if (img.data.length === img.width * img.height * 3) { // RGB
-                            const rgba = new Uint8ClampedArray(img.width * img.height * 4);
-                            for (let j = 0, k = 0; j < img.data.length; j += 3, k += 4) {
-                                rgba[k] = img.data[j];
-                                rgba[k + 1] = img.data[j + 1];
-                                rgba[k + 2] = img.data[j + 2];
-                                rgba[k + 3] = 255;
-                            }
-                            imgData.data.set(rgba);
+                if (!img) return;
+
+                const transform = page.transform(viewport.transform, ops.transformMatrix);
+                const y = transform[5];
+                const x = transform[4];
+
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    const imgData = ctx.createImageData(img.width, img.height);
+                    if (img.data.length === img.width * img.height * 4) { // RGBA
+                        imgData.data.set(img.data);
+                    } else if (img.data.length === img.width * img.height * 3) { // RGB
+                        const rgba = new Uint8ClampedArray(img.width * img.height * 4);
+                        for (let j = 0, k = 0; j < img.data.length; j += 3, k += 4) {
+                            rgba[k] = img.data[j];
+                            rgba[k + 1] = img.data[j + 1];
+                            rgba[k + 2] = img.data[j + 2];
+                            rgba[k + 3] = 255;
                         }
-                        ctx.putImageData(imgData, 0, 0);
-                        imageYCoords[canvas.toDataURL()] = y;
+                        imgData.data.set(rgba);
                     }
+                    ctx.putImageData(imgData, 0, 0);
+                    imageYCoords[canvas.toDataURL()] = { y, x };
                 }
-            }).catch(e => console.error("Error processing image", e));
+            }).catch(e => console.error("Error processing PDF image", e));
             imagePromises.push(promise);
         }
     }
     await Promise.all(imagePromises);
-
 
     let pageItems: { str: string, y: number, x: number }[] = textContent.items.map(item => ({
         str: 'str' in item ? item.str : '',
@@ -399,29 +375,29 @@ export const convertPdfToExcel = async (file: File): Promise<{ questions: Questi
         x: 'transform' in item ? item.transform[4] : 0,
     }));
 
-    Object.entries(imageYCoords).forEach(([imgData, y]) => {
-        pageItems.push({str: `<img src="${imgData}" />`, y, x: 0});
+    Object.entries(imageYCoords).forEach(([imgData, coords]) => {
+        pageItems.push({str: `<img src="${imgData}" />`, y: coords.y, x: coords.x});
     });
 
     pageItems.sort((a, b) => {
-        if (Math.abs(b.y - a.y) < 5) {
+        if (Math.abs(b.y - a.y) < 5) { // Line height threshold
             return a.x - b.x;
         }
-        return (b.y || 0) - (a.y || 0);
+        return b.y - a.y;
     });
 
     let currentLine = '';
     let lastY = pageItems.length > 0 ? pageItems[0].y : null;
 
     for (const item of pageItems) {
-        if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 5) { // Threshold for new line
-            htmlContent += `<p>${currentLine.trim()}</p>`;
+        if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 10) { // New line threshold
+            if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
             currentLine = '';
         }
-        currentLine += item.str + ' ';
+        currentLine += item.str.includes('<img') ? item.str : ` ${item.str} `;
         lastY = item.y;
     }
-    htmlContent += `<p>${currentLine.trim()}</p>`;
+    if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
   }
 
   const questions = parseHtmlToQuestions(htmlContent);
