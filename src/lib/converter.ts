@@ -24,17 +24,18 @@ const parseHtmlToQuestions = (html: string): Question[] => {
 
     const container = document.createElement('div');
     container.innerHTML = html;
-
-    const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]\s*/i;
+    
     let currentQuestion: Question | null = null;
+    const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]\s*/i;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
-            Object.keys(currentQuestion.options).forEach(key => {
-                if (currentQuestion!.options[key]) {
-                    currentQuestion!.options[key] = currentQuestion!.options[key].trim();
-                }
-            });
+            // Trim final question text
+            currentQuestion.questionText = currentQuestion.questionText.trim();
+            // Trim all option text
+            for (const key in currentQuestion.options) {
+                currentQuestion.options[key] = currentQuestion.options[key].trim();
+            }
             questions.push(currentQuestion);
             currentQuestion = null;
         }
@@ -52,66 +53,66 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         if (questionMatch) {
             finalizeQuestion();
             currentQuestion = {
-                questionText: pText.replace(questionStartRegex, '').trim(),
+                questionText: pText.replace(questionStartRegex, ''),
                 options: {},
                 images: [],
             };
-
             pImages.forEach(img => {
                 currentQuestion?.images.push({ data: img.src, in: 'question' });
             });
         } else if (currentQuestion) {
             const optionRegex = /(\([A-D]\))/gi;
-            const parts = p.innerHTML.split(optionRegex).filter(part => part.trim() !== '');
+            // Use innerHTML to preserve image tags
+            const rawHtmlContent = p.innerHTML;
+            
+            // Check if the paragraph contains any option markers at all
+            if (optionRegex.test(rawHtmlContent)) {
+                 // Split the paragraph by option markers.
+                const parts = rawHtmlContent.split(optionRegex).filter(part => part.trim() !== '');
 
-            if (parts.length > 1 && optionRegex.test(p.innerHTML)) {
-                // This paragraph contains option markers
                 let currentOptionLetter: string | null = null;
-                
+
                 parts.forEach(part => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = part.trim();
+                    const partText = tempDiv.textContent?.trim() || '';
+                    const partImages = Array.from(tempDiv.querySelectorAll('img'));
+
                     const optionMatch = part.match(/^\(([A-D])\)$/i);
                     if (optionMatch) {
                         currentOptionLetter = optionMatch[1].toUpperCase();
+                        // Initialize option if not present
                         if (!currentQuestion!.options[currentOptionLetter]) {
                             currentQuestion!.options[currentOptionLetter] = '';
                         }
                     } else if (currentOptionLetter) {
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = part;
-
-                        const contentText = tempDiv.textContent?.trim() || '';
-                        const contentImages = Array.from(tempDiv.querySelectorAll('img'));
-
-                        if (contentText) {
-                            currentQuestion!.options[currentOptionLetter] += (currentQuestion!.options[currentOptionLetter] ? ' ' : '') + contentText;
+                        // This part is content for the current option
+                        if (partText) {
+                            currentQuestion!.options[currentOptionLetter] += (currentQuestion!.options[currentOptionLetter] ? ' ' : '') + partText;
                         }
-                        
-                        contentImages.forEach(img => {
+                        partImages.forEach(img => {
                             currentQuestion!.images.push({ data: img.src, in: `option${currentOptionLetter}` });
                         });
                     } else {
-                         // Content before any option marker in this paragraph belongs to the question
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = part;
-                        const leadingText = tempDiv.textContent?.trim() || '';
-                        const leadingImages = Array.from(tempDiv.querySelectorAll('img'));
-
-                        if(leadingText) {
-                            currentQuestion!.questionText += `\n${leadingText}`;
+                        // This is content before the first option marker in this paragraph
+                        // It belongs to the question.
+                        if (partText) {
+                            currentQuestion!.questionText += `\n${partText}`;
                         }
-                        leadingImages.forEach(img => {
+                        partImages.forEach(img => {
                             currentQuestion!.images.push({ data: img.src, in: 'question' });
                         });
                     }
                 });
+
             } else {
-                 // Paragraph does not contain option markers, append to question
-                 if(pText) {
+                // This entire paragraph has no option markers, so it's a continuation of the question.
+                if (pText) {
                     currentQuestion.questionText += `\n${pText}`;
-                 }
-                 pImages.forEach(img => {
+                }
+                pImages.forEach(img => {
                     currentQuestion!.images.push({ data: img.src, in: 'question' });
-                 });
+                });
             }
         }
     }

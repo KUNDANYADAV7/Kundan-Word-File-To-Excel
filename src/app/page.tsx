@@ -51,6 +51,7 @@ export default function Home() {
         }
     }
     setFile(selectedFile);
+    setPreviewData(null);
   };
 
   const handleConvert = async () => {
