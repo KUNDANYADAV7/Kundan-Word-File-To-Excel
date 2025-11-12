@@ -26,15 +26,20 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     container.innerHTML = html;
     
     let currentQuestion: Question | null = null;
+    let lastParagraphWasQuestion = false;
+
     const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]\s*/i;
+    const optionMarkerRegex = /^\(([A-D])\)/i;
+    const fullOptionRegex = /(\([A-D]\))/gi;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
             currentQuestion.questionText = currentQuestion.questionText.trim();
             for (const key in currentQuestion.options) {
-                currentQuestion.options[key] = currentQuestion.options[key].trim();
+                currentQuestion.options[key] = currentQuestion.options[key]?.trim() || '';
             }
             questions.push(currentQuestion);
+            currentQuestion = null;
         }
     };
     
@@ -45,6 +50,7 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         
         let pText = p.textContent?.trim() || '';
         const pImages = Array.from(p.querySelectorAll('img'));
+        const pInnerHtml = p.innerHTML;
         const questionMatch = pText.match(questionStartRegex);
 
         if (questionMatch) {
@@ -57,14 +63,14 @@ const parseHtmlToQuestions = (html: string): Question[] => {
             pImages.forEach(img => {
                 currentQuestion?.images.push({ data: img.src, in: 'question' });
             });
+            lastParagraphWasQuestion = true;
         } else if (currentQuestion) {
-            const rawHtmlContent = p.innerHTML;
-            const optionRegex = /(\([A-D]\))/gi;
-
-            if (optionRegex.test(rawHtmlContent)) {
-                // This regex splits the content by option markers like (A), (B), etc.
-                // The filter removes empty strings from the result.
-                const parts = rawHtmlContent.split(optionRegex).filter(part => part.trim() !== '');
+            const hasOptionMarker = fullOptionRegex.test(pInnerHtml);
+            
+            if (hasOptionMarker) {
+                 lastParagraphWasQuestion = false;
+                // Split content by option markers, but keep the markers
+                const parts = pInnerHtml.split(fullOptionRegex).filter(part => part.trim() !== '');
                 
                 let currentOptionLetter: string | null = null;
 
@@ -74,16 +80,14 @@ const parseHtmlToQuestions = (html: string): Question[] => {
                     const partText = tempDiv.textContent?.trim() || '';
                     const partImages = Array.from(tempDiv.querySelectorAll('img'));
 
-                    const optionMatch = part.match(/^\(([A-D])\)$/i);
+                    const optionMatch = part.trim().match(optionMarkerRegex);
 
-                    if (optionMatch) {
+                     if (optionMatch) {
                         currentOptionLetter = optionMatch[1].toUpperCase();
-                        // Initialize the option. This is crucial for image-only options.
-                        if (!currentQuestion.options[currentOptionLetter]) {
+                        if (currentQuestion.options[currentOptionLetter] === undefined) {
                             currentQuestion.options[currentOptionLetter] = '';
                         }
                     } else if (currentOptionLetter) {
-                        // This part is the content for the current option
                         if (partText) {
                             currentQuestion.options[currentOptionLetter] += (currentQuestion.options[currentOptionLetter] ? ' ' : '') + partText;
                         }
@@ -91,7 +95,7 @@ const parseHtmlToQuestions = (html: string): Question[] => {
                             currentQuestion!.images.push({ data: img.src, in: `option${currentOptionLetter}` });
                         });
                     } else {
-                        // Content before the first option marker belongs to the question
+                         // Content before any option marker in this paragraph belongs to the question
                         if (partText) {
                             currentQuestion.questionText += `\n${partText}`;
                         }
@@ -101,13 +105,19 @@ const parseHtmlToQuestions = (html: string): Question[] => {
                     }
                 }
             } else {
-                // No option markers in this paragraph, so it's a continuation of the question.
-                if (pText) {
-                    currentQuestion.questionText += `\n${pText}`;
+                 if (lastParagraphWasQuestion && pImages.length > 0 && !pText) {
+                    // This is likely an image for the question on a new line.
+                     pImages.forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: 'question' });
+                    });
                 }
-                pImages.forEach(img => {
-                    currentQuestion!.images.push({ data: img.src, in: 'question' });
-                });
+                else if (pText) {
+                    currentQuestion.questionText += `\n${pText}`;
+                     pImages.forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: 'question' });
+                    });
+                }
+                 lastParagraphWasQuestion = true;
             }
         }
     }
@@ -135,7 +145,7 @@ const formatTextForExcel = (text: string): string => {
     return text;
 };
 
-export const generateExcelFromQuestions = async (questions: Question[]): Promise<Blob> => {
+export const generateExcel = async (questions: Question[]): Promise<Blob> => {
   if (questions.length === 0) {
     throw new Error("No questions found. Check document format. Questions should be numbered (e.g., '1.') and options labeled (e.g., '(A)').");
   }

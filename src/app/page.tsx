@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, FileDown, CheckCircle, Eye, Download } from "lucide-react";
+import { Loader2, Eye, Download, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -16,13 +16,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import Image from "next/image";
 import FileUploader from "@/components/file-uploader";
-import { parseFile, generateExcelFromQuestions, Question } from "@/lib/converter";
+import { parseFile, generateExcel, Question } from "@/lib/converter";
 import { useToast } from "@/hooks/use-toast";
 import { saveAs } from 'file-saver';
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [previewData, setPreviewData] = useState<Question[] | null>(null);
   const { toast } = useToast();
 
@@ -50,6 +52,7 @@ export default function Home() {
     if (!file) return;
 
     setIsProcessing(true);
+    setIsPreviewing(true);
     setPreviewData(null);
     try {
       const questions = await parseFile(file);
@@ -79,6 +82,7 @@ export default function Home() {
       });
     } finally {
       setIsProcessing(false);
+      setIsPreviewing(false);
     }
   };
 
@@ -93,8 +97,9 @@ export default function Home() {
     };
     
     setIsProcessing(true);
+    setIsDownloading(true);
     try {
-        const excelBlob = await generateExcelFromQuestions(previewData);
+        const excelBlob = await generateExcel(previewData);
         saveAs(excelBlob, `${file.name.replace(/\.(docx|pdf)$/, '')}.xlsx`);
         toast({
           title: "Download Successful!",
@@ -112,6 +117,7 @@ export default function Home() {
         });
     } finally {
         setIsProcessing(false);
+        setIsDownloading(false);
     }
   };
   
@@ -150,7 +156,7 @@ export default function Home() {
                     onClick={handleGeneratePreview}
                     disabled={isProcessing}
                 >
-                    {isProcessing && !previewData ? (
+                    {isPreviewing ? (
                         <>
                             <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                             Generating...
@@ -168,7 +174,7 @@ export default function Home() {
                     onClick={handleDownload}
                     disabled={isProcessing || !previewData}
                 >
-                   {isProcessing && previewData ? (
+                   {isDownloading ? (
                         <>
                             <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                             Downloading...
@@ -203,7 +209,6 @@ export default function Home() {
                             {['A', 'B', 'C', 'D'].map(opt => {
                             const optionText = q.options[opt];
                             const optionImages = q.images.filter(img => img.in === `option${opt}`);
-                            // Render the option if it has text OR an image
                             if (optionText === undefined && optionImages.length === 0) return null;
                             
                             return (
