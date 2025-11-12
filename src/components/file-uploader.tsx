@@ -88,10 +88,10 @@ export default function FileUploader({ onFileSelect, file }: FileUploaderProps) 
         id="file-upload"
         className="hidden"
         onChange={handleChange}
-        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
       />
       <UploadCloud className="mb-4 h-12 w-12 text-muted-foreground transition-transform group-hover:scale-110" />
-      <p className="font-semibold text-foreground">Drag & drop your .docx file</p>
+      <p className="font-semibold text-foreground">Drag & drop your .docx or .pdf file</p>
       <p className="text-sm text-muted-foreground">or click to browse</p>
     </div>
   );

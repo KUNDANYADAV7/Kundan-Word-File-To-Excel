@@ -12,7 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import FileUploader from "@/components/file-uploader";
-import { convertDocxToExcel } from "@/lib/converter";
+import { convertDocxToExcel, convertPdfToExcel } from "@/lib/converter";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Home() {
@@ -21,18 +21,20 @@ export default function Home() {
   const { toast } = useToast();
 
   const handleFileSelect = (selectedFile: File | null) => {
-    if (
-      selectedFile &&
-      selectedFile.type !==
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ) {
-      toast({
-        variant: "destructive",
-        title: "Invalid File Type",
-        description: "Please upload a valid .docx file.",
-      });
-      setFile(null);
-      return;
+    if (selectedFile) {
+        const allowedTypes = [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/pdf"
+        ];
+        if (!allowedTypes.includes(selectedFile.type)) {
+            toast({
+                variant: "destructive",
+                title: "Invalid File Type",
+                description: "Please upload a valid .docx or .pdf file.",
+            });
+            setFile(null);
+            return;
+        }
     }
     setFile(selectedFile);
   };
@@ -42,7 +44,11 @@ export default function Home() {
 
     setIsConverting(true);
     try {
-      await convertDocxToExcel(file);
+      if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+        await convertDocxToExcel(file);
+      } else if (file.type === "application/pdf") {
+        await convertPdfToExcel(file);
+      }
       toast({
         title: "Success!",
         description: "Your Excel file has been generated and downloaded.",
@@ -79,10 +85,10 @@ export default function Home() {
                 <FileUpIcon />
             </div>
             <CardTitle className="font-headline text-2xl">
-              DocX to Excel Converter
+              DocX/PDF to Excel Converter
             </CardTitle>
             <CardDescription>
-              Upload your quiz in .docx format to convert it into a structured Excel sheet, complete with images.
+              Upload your quiz in .docx or .pdf format to convert it into a structured Excel sheet.
             </CardDescription>
           </CardHeader>
           <CardContent>

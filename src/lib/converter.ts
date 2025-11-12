@@ -3,6 +3,11 @@
 import mammoth from 'mammoth';
 import * as ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.entry";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
 
 type Question = {
   questionText: string;
@@ -13,7 +18,7 @@ type Question = {
 const PIXELS_TO_EMUS = 9525;
 const DEFAULT_ROW_HEIGHT_IN_POINTS = 21.75; 
 const POINTS_TO_PIXELS = 4 / 3;
-const IMAGE_MARGIN_PIXELS = 15; // Increased space between text and image
+const IMAGE_MARGIN_PIXELS = 15;
 
 const parseHtmlToQuestions = (html: string): Question[] => {
   const questions: Question[] = [];
@@ -26,14 +31,12 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = element.innerHTML;
     
-    // Convert superscript '2' to '²' for cm² etc.
     tempDiv.querySelectorAll('sup').forEach(sup => {
       if (sup.textContent?.trim() === '2') {
         sup.textContent = '²';
       }
     });
     
-    // Replace " deg" with the degree symbol "°"
     let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
     text = text.replace(/ deg/g, '°');
     return text;
@@ -142,36 +145,7 @@ const formatTextForExcel = (text: string): string => {
     return text;
 };
 
-
-export const convertDocxToExcel = async (file: File) => {
-  const arrayBuffer = await file.arrayBuffer();
-
-  const { value: rawHtml } = await mammoth.convertToHtml({ arrayBuffer }, {
-    transformDocument: mammoth.transforms.paragraph(p => {
-        p.children.forEach(run => {
-            if (run.type === 'run') {
-                if (run.isSuperscript) {
-                     run.children.forEach(text => {
-                        if (text.type === 'text' && text.value === '2') {
-                           text.value = '²'; // Replace with the actual superscript character
-                        }
-                    });
-                }
-                // Before processing, replace degree symbols with a unique text placeholder
-                // to prevent it from being stripped or converted incorrectly.
-                run.children.forEach(text => {
-                    if (text.type === 'text') {
-                        text.value = text.value.replace(/°/g, ' deg');
-                    }
-                });
-            }
-        });
-        return p;
-    })
-  });
-  
-  const questions = parseHtmlToQuestions(rawHtml);
-
+const generateExcelFromQuestions = async (questions: Question[], fileName: string) => {
   if (questions.length === 0) {
     throw new Error("No questions found. Check document format. Questions should be numbered (e.g., '1.') and options labeled (e.g., '(A)').");
   }
@@ -241,7 +215,7 @@ export const convertDocxToExcel = async (file: File) => {
           let totalHeight = 0;
           lines.forEach(line => {
             const textMetrics = context.measureText(line);
-            totalHeight += textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 5; // line spacing
+            totalHeight += textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 5;
           });
           textHeightInPixels = totalHeight;
         }
@@ -264,14 +238,14 @@ export const convertDocxToExcel = async (file: File) => {
                   currentImageOffset += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
 
                   const column = worksheet.getColumn(cell.col);
-                  const cellWidthInPixels = column.width ? column.width * 7 : 100; // Approximate pixel width
+                  const cellWidthInPixels = column.width ? column.width * 7 : 100;
                   const colOffsetInPixels = (cellWidthInPixels - imageWidthInPixels) / 2;
                   
                   worksheet.addImage(imageId, {
                     tl: { col: cell.col - 1, row: cell.row - 1 },
                     ext: { width: imageWidthInPixels, height: imageHeightInPixels }
                   });
-
+                  
                   const media = (worksheet as any).media;
                   if (media && media.length > 0) {
                     const lastImage = media[media.length - 1];
@@ -289,12 +263,10 @@ export const convertDocxToExcel = async (file: File) => {
         return { totalHeight: totalCellHeightInPixels / POINTS_TO_PIXELS, textHeight: textHeightInPixels / POINTS_TO_PIXELS };
     };
     
-    // Process question column
     const questionImages = q.images.filter(img => img.in === 'question');
     let { totalHeight: questionCellHeight } = await calculateCellHeight(row.getCell('question'), q.questionText, questionImages);
     maxRowHeightInPoints = Math.max(maxRowHeightInPoints, questionCellHeight);
 
-    // Process options columns
     let maxOptionHeight = 0;
     for (const [i, letter] of ['A', 'B', 'C', 'D'].entries()) {
         const optionText = optionsMap[letter] || '';
@@ -321,5 +293,84 @@ export const convertDocxToExcel = async (file: File) => {
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  saveAs(blob, `${file.name.replace(/\.docx$/, '')}.xlsx`);
+  saveAs(blob, `${fileName.replace(/\.(docx|pdf)$/, '')}.xlsx`);
+};
+
+
+export const convertDocxToExcel = async (file: File) => {
+  const arrayBuffer = await file.arrayBuffer();
+
+  const { value: rawHtml } = await mammoth.convertToHtml({ arrayBuffer }, {
+    transformDocument: mammoth.transforms.paragraph(p => {
+        p.children.forEach(run => {
+            if (run.type === 'run') {
+                if (run.isSuperscript) {
+                     run.children.forEach(text => {
+                        if (text.type === 'text' && text.value === '2') {
+                           text.value = '²';
+                        }
+                    });
+                }
+                run.children.forEach(text => {
+                    if (text.type === 'text') {
+                        text.value = text.value.replace(/°/g, ' deg');
+                    }
+                });
+            }
+        });
+        return p;
+    })
+  });
+  
+  const questions = parseHtmlToQuestions(rawHtml);
+  await generateExcelFromQuestions(questions, file.name);
+};
+
+
+export const convertPdfToExcel = async (file: File) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+    const numPages = pdf.numPages;
+    let questions: Question[] = [];
+
+    // Simple text-based parsing for PDFs
+    let fullText = '';
+    for (let i = 1; i <= numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        fullText += textContent.items.map(item => ('str' in item ? item.str : '')).join(' ') + '\n';
+    }
+
+    const questionRegex = /(?:Q|Question)?\s*(\d+)[.)]([\s\S]*?)(?=(?:Q|Question)?\s*\d+[.)]|\s*$)/g;
+    let match;
+    while((match = questionRegex.exec(fullText)) !== null) {
+        const questionBlock = match[2];
+        const optionRegex = /\s*\(([A-D])\)\s*([\s\S]*?)(?=\s*\([A-D]\)|$)/gi;
+        
+        let questionText = questionBlock;
+        const options: string[] = [];
+        let optionMatch;
+        let firstOptionIndex = -1;
+
+        while((optionMatch = optionRegex.exec(questionBlock)) !== null) {
+            if(firstOptionIndex === -1) {
+                firstOptionIndex = optionMatch.index;
+            }
+            options.push(`(${optionMatch[1]}) ${optionMatch[2].trim()}`);
+        }
+        
+        if (firstOptionIndex !== -1) {
+            questionText = questionBlock.substring(0, firstOptionIndex).trim();
+        }
+
+        if (questionText && options.length > 0) {
+            questions.push({
+                questionText: questionText.replace(/\s+/g, ' ').trim(),
+                options: options,
+                images: [] // Image extraction from PDF is complex, skipping for now
+            });
+        }
+    }
+
+    await generateExcelFromQuestions(questions, file.name);
 };
