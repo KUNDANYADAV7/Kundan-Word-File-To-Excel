@@ -27,12 +27,11 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     container.innerHTML = html;
 
     let currentQuestion: Question | null = null;
-    let lastProcessedElement: 'question' | 'option' = 'question';
-    let lastOptionKey: string | null = null;
+    let currentState: 'question' | 'option' = 'question';
+    let currentOptionKey: string | null = null;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
-            // Trim trailing newlines from text
             currentQuestion.questionText = currentQuestion.questionText.trim();
             for (const key in currentQuestion.options) {
                 currentQuestion.options[key] = currentQuestion.options[key].trim();
@@ -40,165 +39,97 @@ const parseHtmlToQuestions = (html: string): Question[] => {
             questions.push(currentQuestion);
         }
     };
-    
+
     const elements = Array.from(container.children);
 
-    for (const p of elements) {
-        if (!(p instanceof HTMLElement)) continue;
+    for (const el of elements) {
+        if (!(el instanceof HTMLElement)) continue;
 
-        let pText = (p.textContent || '').trim();
-        const pHTML = p.innerHTML;
+        let content = el.innerHTML.trim();
+        const textContent = (el.textContent || '').trim();
 
-        // Regex to find question number at the beginning of the text content
-        const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s+/i;
-        const questionMatch = pText.match(questionStartRegex);
-        
-        // Regex to find option markers anywhere in the inner HTML
+        const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s*/i;
         const optionMarkerRegex = /\(([A-Z])\)/g;
-        
-        if (questionMatch) {
+
+        // Check for new question
+        if (questionStartRegex.test(textContent)) {
             finalizeQuestion();
+            const questionNumberMatch = textContent.match(questionStartRegex);
+            const questionNumber = questionNumberMatch![1];
             
-            pText = pText.substring(questionMatch[0].length);
+            // Adjust content to be everything after the question number
+            const numberIndex = content.indexOf(questionNumber) + questionNumber.length;
+            content = content.substring(numberIndex).replace(/^[.)]?\s*/, '');
 
             currentQuestion = {
-                questionText: "",
+                questionText: '',
                 options: {},
                 images: [],
             };
-            lastProcessedElement = 'question';
-            lastOptionKey = null;
+            currentState = 'question';
+            currentOptionKey = null;
+        }
 
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = pHTML;
+        if (!currentQuestion) continue;
 
-            const contentAfterQuestionNumber = tempDiv.innerHTML.substring(tempDiv.innerHTML.indexOf(questionMatch[1]) + questionMatch[1].length).replace(/^[.)]?\s*/, '');
-            tempDiv.innerHTML = contentAfterQuestionNumber;
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = content;
+        
+        const allNodes = Array.from(tempDiv.childNodes);
+        
+        for (const node of allNodes) {
+             if (node.nodeType === Node.TEXT_NODE) {
+                const nodeText = (node.textContent || '').trim();
+                const markers = [...nodeText.matchAll(optionMarkerRegex)];
 
-            const markers = [...contentAfterQuestionNumber.matchAll(optionMarkerRegex)];
-
-            if (markers.length > 0) {
-                 // Question and options might be on the same line
-                const parts = contentAfterQuestionNumber.split(optionMarkerRegex);
-                const questionPartDiv = document.createElement('div');
-                questionPartDiv.innerHTML = parts[0];
-                currentQuestion.questionText = (currentQuestion.questionText + ' ' + (questionPartDiv.textContent || '').trim()).trim();
-
-                Array.from(questionPartDiv.querySelectorAll('img')).forEach(img => {
-                     currentQuestion!.images.push({ data: img.src, in: 'question' });
-                });
-
-                let partIndex = 1;
-                for (const marker of markers) {
-                    const optionLetter = marker[1];
-                    lastOptionKey = optionLetter;
-                    lastProcessedElement = 'option';
-                    
-                    const contentPart = parts[partIndex + 1] || '';
-                    const contentDiv = document.createElement('div');
-                    contentDiv.innerHTML = contentPart;
-                    
-                    const optionText = (contentDiv.textContent || '').trim();
-                    if(optionText) {
-                         currentQuestion.options[optionLetter] = (currentQuestion.options[optionLetter] || '') + ' ' + optionText;
-                    }
-                    
-                    const imagesInOption = Array.from(contentDiv.querySelectorAll('img'));
-                    imagesInOption.forEach(img => {
-                        currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
-                    });
-
-                     if (imagesInOption.length > 0 && !currentQuestion.options[optionLetter]) {
-                        currentQuestion.options[optionLetter] = ''; // Ensure option exists
-                    }
-                    partIndex += 2;
-                }
-            } else {
-                 currentQuestion.questionText = (currentQuestion.questionText + ' ' + (tempDiv.textContent || '').trim()).trim();
-                 Array.from(tempDiv.querySelectorAll('img')).forEach(img => {
-                    currentQuestion!.images.push({ data: img.src, in: 'question' });
-                 });
-            }
-        } else if (currentQuestion) {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = pHTML;
-            const markers = [...pHTML.matchAll(optionMarkerRegex)];
-
-            if (markers.length > 0) {
-                const parts = pHTML.split(optionMarkerRegex);
-
-                // Handle content before the first option marker
-                const beforePartDiv = document.createElement('div');
-                beforePartDiv.innerHTML = parts[0];
-                const textBefore = (beforePartDiv.textContent || '').trim();
-                
-                if (textBefore) {
-                  if (lastProcessedElement === 'option' && lastOptionKey) {
-                      currentQuestion.options[lastOptionKey] = (currentQuestion.options[lastOptionKey] || '') + '\n' + textBefore;
-                  } else if (lastProcessedElement === 'question'){
-                      currentQuestion.questionText += '\n' + textBefore;
-                  }
-                }
-
-                Array.from(beforePartDiv.querySelectorAll('img')).forEach(img => {
-                    const target = lastProcessedElement === 'option' && lastOptionKey ? `option${lastOptionKey}` : 'question';
-                    currentQuestion!.images.push({ data: img.src, in: target });
-                });
-
-                // Handle each option part
-                let partIndex = 1;
-                for (const marker of markers) {
-                    lastProcessedElement = 'option';
-                    const optionLetter = marker[1];
-                    lastOptionKey = optionLetter;
-                    
-                    const contentPart = parts[partIndex + 1] || '';
-                    const contentDiv = document.createElement('div');
-                    contentDiv.innerHTML = contentPart;
-
-                    const optionText = (contentDiv.textContent || '').trim();
-                    if (optionText) {
-                      currentQuestion.options[optionLetter] = ((currentQuestion.options[optionLetter] || '') + ' ' + optionText).trim();
-                    }
-                    
-                    const imagesInPart = Array.from(contentDiv.querySelectorAll('img'));
-                    imagesInPart.forEach(img => {
-                        currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
-                    });
-
-                    if (imagesInPart.length > 0 && !currentQuestion.options[optionLetter]) {
-                        currentQuestion.options[optionLetter] = ''; // Ensure option exists if only image
-                    }
-
-                    partIndex += 2;
-                }
-            } else {
-                // This is a continuation paragraph (text or image)
-                const text = (p.textContent || '').trim();
-                const images = Array.from(p.querySelectorAll('img'));
-
-                const target = lastProcessedElement === 'option' && lastOptionKey ? `option${lastOptionKey}` : 'question';
-
-                if (text) {
-                     if (target.startsWith('option')) {
-                        currentQuestion.options[lastOptionKey!] = ((currentQuestion.options[lastOptionKey!] || '') + '\n' + text).trim();
-                    } else {
-                        currentQuestion.questionText = (currentQuestion.questionText + '\n' + text).trim();
-                    }
-                }
-                
-                if (images.length > 0) {
-                    images.forEach(img => {
-                        currentQuestion!.images.push({ data: img.src, in: target });
-                        if(target.startsWith('option') && !currentQuestion!.options[lastOptionKey!]){
-                            currentQuestion!.options[lastOptionKey!] = ''; // Ensure option exists if it was created just for an image
+                if (markers.length > 0) {
+                    let lastIndex = 0;
+                    for (const marker of markers) {
+                        // Text before the marker
+                        const textBefore = nodeText.substring(lastIndex, marker.index).trim();
+                        if (textBefore) {
+                            if (currentState === 'option' && currentOptionKey) {
+                                currentQuestion.options[currentOptionKey] += ` ${textBefore}`;
+                            } else {
+                                currentQuestion.questionText += ` ${textBefore}`;
+                            }
                         }
-                    });
+
+                        // We found an option marker, change state
+                        currentState = 'option';
+                        currentOptionKey = marker[1];
+                        if (!currentQuestion.options[currentOptionKey]) {
+                            currentQuestion.options[currentOptionKey] = '';
+                        }
+                        lastIndex = marker.index! + marker[0].length;
+                    }
+                    // Text after the last marker
+                    const textAfter = nodeText.substring(lastIndex).trim();
+                    if (textAfter) {
+                        if (currentState === 'option' && currentOptionKey) {
+                            currentQuestion.options[currentOptionKey] += ` ${textAfter}`;
+                        }
+                    }
+                } else if (nodeText) {
+                     // No markers, just text, so append to current state
+                     if (currentState === 'option' && currentOptionKey) {
+                         currentQuestion.options[currentOptionKey] += ` ${nodeText}`;
+                     } else {
+                         currentQuestion.questionText += ` ${nodeText}`;
+                     }
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === 'IMG') {
+                const img = node as HTMLImageElement;
+                const target = currentState === 'option' && currentOptionKey ? `option${currentOptionKey}` : 'question';
+                currentQuestion.images.push({ data: img.src, in: target });
+                // If we are in an option state and it has no text yet, create it.
+                if (currentState === 'option' && currentOptionKey && !currentQuestion.options[currentOptionKey]) {
+                    currentQuestion.options[currentOptionKey] = '';
                 }
             }
         }
     }
-    
+
     finalizeQuestion();
     return questions;
 };
@@ -379,22 +310,20 @@ export const parseFile = async (file: File): Promise<Question[]> => {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
         
-        let combinedTextAndImages: { str: string, y: number, x: number }[] = [];
-
+        let combinedHtml = '';
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
             const textContent = await page.getTextContent();
             const viewport = page.getViewport({ scale: 1.5 });
             const ops = await page.getOperatorList();
             
-            const imageYCoords: { [key: string]: {y: number, x: number} } = {};
-            const imagePromises: Promise<void>[] = [];
+            const imagePromises: Promise<{ data: string, y: number, x: number }>[] = [];
 
             for (let i = 0; i < ops.fnArray.length; i++) {
                 if (ops.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
                     const imgKey = ops.argsArray[i][0];
                     const promise = page.objs.get(imgKey).then((img: any) => {
-                        if (!img) return;
+                        if (!img) return null;
 
                         const transform = page.transform(viewport.transform, ops.transformMatrix);
                         const y = transform[5];
@@ -430,13 +359,17 @@ export const parseFile = async (file: File): Promise<Question[]> => {
                             }
                             imgData.data.set(data);
                             ctx.putImageData(imgData, 0, 0);
-                            imageYCoords[canvas.toDataURL()] = { y, x };
+                            return { data: canvas.toDataURL(), y, x };
                         }
-                    }).catch(e => console.error("Error processing PDF image", e));
-                    imagePromises.push(promise);
+                        return null;
+                    }).catch(e => {
+                        console.error("Error processing PDF image", e);
+                        return null;
+                    });
+                    if (promise) imagePromises.push(promise as Promise<{ data: string, y: number, x: number }>);
                 }
             }
-            await Promise.all(imagePromises);
+            const images = (await Promise.all(imagePromises)).filter(img => img !== null);
 
             let pageItems: { str: string, y: number, x: number }[] = textContent.items.map(item => ({
                 str: 'str' in item ? item.str : '',
@@ -444,41 +377,34 @@ export const parseFile = async (file: File): Promise<Question[]> => {
                 x: 'transform' in item ? item.transform[4] : 0,
             }));
 
-            Object.entries(imageYCoords).forEach(([imgData, coords]) => {
-                pageItems.push({str: `<img src="${imgData}" />`, y: coords.y, x: coords.x});
+            images.forEach(img => {
+                pageItems.push({str: `<img src="${img.data}" />`, y: img.y, x: img.x});
             });
             
-            // Adjust y-coordinates for page position
-            const pageOffset = (pdf.numPages - pageNum) * 1000;
-            pageItems.forEach(item => item.y += pageOffset);
-            combinedTextAndImages.push(...pageItems);
-        }
+            pageItems.sort((a, b) => {
+                if (Math.abs(b.y - a.y) < 5) { // Line height threshold
+                    return a.x - b.x;
+                }
+                return b.y - a.y;
+            });
+            
+            let currentLine = '';
+            let lastY = pageItems.length > 0 ? pageItems[0].y : null;
 
-        combinedTextAndImages.sort((a, b) => {
-            if (Math.abs(b.y - a.y) < 5) { // Line height threshold
-                return a.x - b.x;
+            for (const item of pageItems) {
+                if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 10) { // New line threshold
+                    if (currentLine.trim()) combinedHtml += `<p>${currentLine.trim()}</p>`;
+                    currentLine = '';
+                }
+                currentLine += item.str.includes('<img') ? item.str : ` ${item.str} `;
+                lastY = item.y;
             }
-            return b.y - a.y;
-        });
-
-        let currentLine = '';
-        let lastY = combinedTextAndImages.length > 0 ? combinedTextAndImages[0].y : null;
-
-        for (const item of combinedTextAndImages) {
-            if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 10) { // New line threshold
-                if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
-                currentLine = '';
-            }
-            currentLine += item.str.includes('<img') ? item.str : ` ${item.str} `;
-            lastY = item.y;
+            if (currentLine.trim()) combinedHtml += `<p>${currentLine.trim()}</p>`;
         }
-        if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
-
+        htmlContent = combinedHtml;
     } else {
         throw new Error("Unsupported file type");
     }
-
+    
     return parseHtmlToQuestions(htmlContent);
 };
-
-    
