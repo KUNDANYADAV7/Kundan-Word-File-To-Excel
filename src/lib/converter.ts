@@ -31,11 +31,15 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = element.innerHTML;
     
+    // Replace superscript tags with the '²' character
     tempDiv.querySelectorAll('sup').forEach(sup => {
-        sup.textContent = '²';
+      // A simple replacement for now, can be expanded if other superscripts are needed
+      sup.textContent = '²';
     });
     
+    // Get text content and clean it up
     let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
+    // Replace degree placeholder with the actual symbol
     text = text.replace(/ deg/g, '°');
     return text;
   };
@@ -61,6 +65,8 @@ const parseHtmlToQuestions = (html: string): Question[] => {
       }
 
       let j = i + 1;
+      let currentOptionLetter: string | null = null;
+
       while (j < children.length) {
         const nextEl = children[j] as HTMLElement;
         const nextText = processContent(nextEl);
@@ -69,19 +75,22 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         const nextElIsQuestion = nextEl.tagName === 'P' && questionStartRegex.test(nextText);
 
         if (nextElIsQuestion) {
-          break; 
+          break; // Stop and process the next question
         }
 
         if (nextEl.tagName === 'P') {
             if (optionRegex.test(nextText)) {
+              // This line can contain multiple options, e.g., (A) ... (B) ...
               const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
               for(const opt of sameLineOptions) {
                 const optionMatch = opt.match(optionRegex);
                 if(optionMatch && optionMatch[1]) {
                   questionData.options.push(opt);
+                  currentOptionLetter = optionMatch[1].toUpperCase();
                 }
               }
             } else if (nextText) {
+                // This text belongs to the previous element (either question or an option)
                 if(questionData.options.length > 0) {
                     const lastOptionIndex = questionData.options.length - 1;
                     questionData.options[lastOptionIndex] += '\n' + nextText;
@@ -91,17 +100,15 @@ const parseHtmlToQuestions = (html: string): Question[] => {
             }
         }
         
+        // Process images within the current element
         const nextElImgs = nextEl.querySelectorAll('img');
         nextElImgs.forEach(img => {
             if (img.src && !questionData.images.some(existingImg => existingImg.data === img.src)) {
-                 if (questionData.options.length > 0) {
-                    const lastOption = questionData.options[questionData.options.length - 1];
-                    const optionLabelMatch = lastOption.match(/^\s*\(([A-D])\)/i);
-                    if(optionLabelMatch && optionLabelMatch[1]){
-                        const optionLetter = optionLabelMatch[1].toUpperCase();
-                        questionData.images.push({ data: img.src, in: `option${optionLetter}` });
-                    }
+                 if (currentOptionLetter) {
+                    // Image is associated with the last found option
+                    questionData.images.push({ data: img.src, in: `option${currentOptionLetter}` });
                 } else {
+                    // Image is part of the question itself
                     questionData.images.push({ data: img.src, in: 'question' });
                 }
             }
@@ -110,13 +117,14 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         j++;
       }
       
+      // Only add the question if it has a question and at least one option
       if (questionData.questionText && questionData.options.length > 0) {
         questions.push(questionData);
       }
       
-      i = j;
+      i = j; // Move the main index to where the inner loop stopped
     } else {
-      i++;
+      i++; // Go to the next element
     }
   }
 
@@ -231,12 +239,14 @@ const generateExcelFromQuestions = async (questions: Question[], fileName: strin
                   const imageWidthInPixels = 100;
                   const imageHeightInPixels = (imageDims.height / imageDims.width) * imageWidthInPixels;
                   
+                  // This is the crucial part: add a significant margin after text.
                   const rowOffsetInPixels = currentImageOffset + (currentImageOffset > 0 ? IMAGE_MARGIN_PIXELS : 0);
+                  
                   cumulativeImageHeight += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
                   currentImageOffset += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
 
                   const column = worksheet.getColumn(cell.col);
-                  const cellWidthInPixels = column.width ? column.width * 7 : 100;
+                  const cellWidthInPixels = column.width ? column.width * 7 : 100; // 7 is an approximation for pixel width of a character
                   const colOffsetInPixels = (cellWidthInPixels - imageWidthInPixels) / 2;
                   
                   worksheet.addImage(imageId, {
@@ -244,9 +254,9 @@ const generateExcelFromQuestions = async (questions: Question[], fileName: strin
                     ext: { width: imageWidthInPixels, height: imageHeightInPixels }
                   });
                   
-                  const media = (worksheet as any).media;
-                  if (media && media.length > 0) {
-                    const lastImage = media[media.length - 1];
+                   // Check if media exists before trying to access it
+                  if ((worksheet as any).media && (worksheet as any).media.length > 0) {
+                    const lastImage = (worksheet as any).media[(worksheet as any).media.length - 1];
                     if (lastImage && lastImage.range) {
                       lastImage.range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
                       lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
@@ -299,16 +309,19 @@ export const convertDocxToExcel = async (file: File) => {
   const arrayBuffer = await file.arrayBuffer();
 
   const { value: rawHtml } = await mammoth.convertToHtml({ arrayBuffer }, {
+    // A transform function to preserve special characters during conversion
     transformDocument: mammoth.transforms.paragraph(p => {
         p.children.forEach(run => {
             if (run.type === 'run') {
                 if (run.isSuperscript) {
+                     // Specifically handle '2' for cm² case
                      run.children.forEach(text => {
-                        if (text.type === 'text') {
-                           text.value = '²';
+                        if (text.type === 'text' && text.value === '2') {
+                           text.value = '²'; // Replace with the actual superscript character
                         }
                     });
                 }
+                // Convert degree placeholder to a real symbol that we'll handle later
                 run.children.forEach(text => {
                     if (text.type === 'text') {
                         text.value = text.value.replace(/°/g, ' deg');
@@ -338,44 +351,53 @@ export const convertPdfToExcel = async (file: File) => {
     }
 
     const questions: Question[] = [];
-    const lines = fullText.split('\n');
-    let currentQuestion: Question | null = null;
-    let currentOption = -1;
+    // Process lines more robustly
+    const lines = fullText.split('\n').filter(line => line.trim().length > 0);
+    let i = 0;
 
-    const questionRegex = /^(?:Q|Question)?\s*\d+[.)]/;
-    const optionRegex = /^\s*\([A-D]\)/i;
+    while (i < lines.length) {
+        const line = lines[i].trim();
+        const questionRegex = /^(?:Q|Question)?\s*(\d+)[.)]/;
+        const match = line.match(questionRegex);
 
-    for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (questionRegex.test(trimmedLine)) {
-            if (currentQuestion && currentQuestion.options.length > 0) {
-                questions.push(currentQuestion);
-            }
-            currentQuestion = {
-                questionText: trimmedLine.replace(questionRegex, '').trim(),
+        if (match) {
+            let questionText = line.replace(questionRegex, '').trim();
+            const currentQuestion: Question = {
+                questionText: '',
                 options: [],
                 images: [],
             };
-            currentOption = -1;
-        } else if (currentQuestion && optionRegex.test(trimmedLine)) {
-             const sameLineOptions = trimmedLine.split(/\s*(?=\([B-D]\))/i);
-              for(const opt of sameLineOptions) {
-                if(optionRegex.test(opt)) {
-                    currentQuestion.options.push(opt.trim());
-                }
-              }
-            currentOption = currentQuestion.options.length -1;
-        } else if (currentQuestion && trimmedLine) {
-            if (currentOption !== -1) {
-                currentQuestion.options[currentOption] += ' ' + trimmedLine;
-            } else {
-                currentQuestion.questionText += ' ' + trimmedLine;
+            
+            // Collect multi-line question text
+            let nextIndex = i + 1;
+            while(nextIndex < lines.length && !lines[nextIndex].trim().match(questionRegex) && !lines[nextIndex].trim().match(/^\s*\([A-D]\)/i)) {
+                questionText += ' ' + lines[nextIndex].trim();
+                nextIndex++;
             }
-        }
-    }
+            currentQuestion.questionText = questionText;
 
-    if (currentQuestion && currentQuestion.options.length > 0) {
-        questions.push(currentQuestion);
+            i = nextIndex;
+
+            // Collect options
+            while(i < lines.length && !lines[i].trim().match(questionRegex)) {
+                const optionLine = lines[i].trim();
+                const optionRegex = /^\s*\(([A-D]\))/i;
+                if (optionLine.match(optionRegex)) {
+                    currentQuestion.options.push(optionLine);
+                } else if (currentQuestion.options.length > 0) {
+                    // Append to the last option if it's a continuation
+                    currentQuestion.options[currentQuestion.options.length - 1] += ' ' + optionLine;
+                }
+                i++;
+            }
+            
+            if (currentQuestion.questionText && currentQuestion.options.length > 0) {
+                 questions.push(currentQuestion);
+            }
+            // The loop will continue from the start of the next question
+            continue;
+        }
+        i++;
     }
 
     await generateExcelFromQuestions(questions, file.name);
