@@ -26,10 +26,14 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = element.innerHTML;
     
+    // Convert superscript '2' to '²' for cm² etc.
     tempDiv.querySelectorAll('sup').forEach(sup => {
+      if (sup.textContent?.trim() === '2') {
         sup.textContent = '²';
+      }
     });
-
+    
+    // Replace " deg" with the degree symbol "°"
     let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
     text = text.replace(/ deg/g, '°');
     return text;
@@ -149,10 +153,12 @@ export const convertDocxToExcel = async (file: File) => {
                 if (run.isSuperscript) {
                      run.children.forEach(text => {
                         if (text.type === 'text' && text.value === '2') {
-                           text.value = '²';
+                           text.value = '²'; // Replace with the actual superscript character
                         }
                     });
                 }
+                // Before processing, replace degree symbols with a unique text placeholder
+                // to prevent it from being stripped or converted incorrectly.
                 run.children.forEach(text => {
                     if (text.type === 'text') {
                         text.value = text.value.replace(/°/g, ' deg');
@@ -163,7 +169,7 @@ export const convertDocxToExcel = async (file: File) => {
         return p;
     })
   });
-
+  
   const questions = parseHtmlToQuestions(rawHtml);
 
   if (questions.length === 0) {
@@ -231,8 +237,13 @@ export const convertDocxToExcel = async (file: File) => {
           const context = canvas.getContext("2d");
           if(!context) return { totalHeight: 0, textHeight: 0 };
           context.font = "11pt Calibri";
-          const textMetrics = context.measureText(formattedText);
-          textHeightInPixels = (textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 5) * lines.length;
+
+          let totalHeight = 0;
+          lines.forEach(line => {
+            const textMetrics = context.measureText(line);
+            totalHeight += textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent + 5; // line spacing
+          });
+          textHeightInPixels = totalHeight;
         }
         
         let cumulativeImageHeight = 0;
@@ -259,6 +270,7 @@ export const convertDocxToExcel = async (file: File) => {
                     ext: { width: imageWidthInPixels, height: imageHeightInPixels }
                   });
 
+                  // Safely access and modify the media object
                   const media = (worksheet as any).media;
                   if (media && media.length > 0) {
                     const lastImage = media[media.length - 1];
@@ -276,9 +288,12 @@ export const convertDocxToExcel = async (file: File) => {
         return { totalHeight: totalCellHeightInPixels / POINTS_TO_PIXELS, textHeight: textHeightInPixels / POINTS_TO_PIXELS };
     };
     
-    let { totalHeight: questionCellHeight } = await calculateCellHeight(row.getCell('question'), q.questionText, q.images.filter(img => img.in === 'question'));
+    // Process question column
+    const questionImages = q.images.filter(img => img.in === 'question');
+    let { totalHeight: questionCellHeight } = await calculateCellHeight(row.getCell('question'), q.questionText, questionImages);
     maxRowHeightInPoints = Math.max(maxRowHeightInPoints, questionCellHeight);
 
+    // Process options columns
     let maxOptionHeight = 0;
     for (const [i, letter] of ['A', 'B', 'C', 'D'].entries()) {
         const optionText = optionsMap[letter] || '';
