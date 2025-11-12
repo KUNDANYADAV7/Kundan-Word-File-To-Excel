@@ -27,9 +27,7 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     tempDiv.innerHTML = element.innerHTML;
     
     tempDiv.querySelectorAll('sup').forEach(sup => {
-      if (sup.textContent === '2') {
         sup.textContent = '²';
-      }
     });
 
     let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
@@ -149,9 +147,8 @@ export const convertDocxToExcel = async (file: File) => {
             if (run.type === 'run') {
                 if (run.isSuperscript) {
                     run.children.forEach(text => {
-                        if (text.type === 'text' && text.value === '2') {
-                           // This is a simple transform, might need to be more robust
-                           // For now, let's keep it simple
+                        if (text.type === 'text') {
+                            // Keep superscript logic simple for now
                         }
                     });
                 }
@@ -229,12 +226,13 @@ export const convertDocxToExcel = async (file: File) => {
         
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
-        if(!context) return 0;
+        if(!context) return { totalHeight: 0, textHeight: 0 };
         context.font = "11pt Calibri";
         const textMetrics = context.measureText(formattedText);
         const textHeightInPixels = (textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent) * lines.length;
         
         let cumulativeImageHeight = 0;
+        let currentImageOffset = textHeightInPixels;
 
         if (images.length > 0) {
            for (const imgData of images) {
@@ -246,8 +244,9 @@ export const convertDocxToExcel = async (file: File) => {
                   const imageWidthInPixels = 100;
                   const imageHeightInPixels = (imageDims.height / imageDims.width) * imageWidthInPixels;
                   
-                  const rowOffsetInPixels = textHeightInPixels + IMAGE_MARGIN_PIXELS;
+                  const rowOffsetInPixels = currentImageOffset + IMAGE_MARGIN_PIXELS;
                   cumulativeImageHeight += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
+                  currentImageOffset += imageHeightInPixels + IMAGE_MARGIN_PIXELS;
 
                   const colOffsetInPixels = 5;
                   
@@ -268,10 +267,10 @@ export const convertDocxToExcel = async (file: File) => {
         }
         
         const totalCellHeightInPixels = textHeightInPixels + cumulativeImageHeight;
-        return totalCellHeightInPixels / POINTS_TO_PIXELS;
+        return { totalHeight: totalCellHeightInPixels / POINTS_TO_PIXELS, textHeight: textHeightInPixels / POINTS_TO_PIXELS };
     };
     
-    let questionCellHeight = await calculateCellHeight(row.getCell('question'), q.questionText, q.images.filter(img => img.in === 'question'));
+    let { totalHeight: questionCellHeight } = await calculateCellHeight(row.getCell('question'), q.questionText, q.images.filter(img => img.in === 'question'));
     maxRowHeightInPoints = Math.max(maxRowHeightInPoints, questionCellHeight);
 
     let maxOptionHeight = 0;
@@ -279,7 +278,7 @@ export const convertDocxToExcel = async (file: File) => {
         const optionText = optionsMap[letter] || '';
         const optionImages = q.images.filter(img => img.in === `option${letter}`);
         const cell = row.getCell(`alt${i+1}`);
-        const optionCellHeight = await calculateCellHeight(cell, optionText, optionImages);
+        const { totalHeight: optionCellHeight } = await calculateCellHeight(cell, optionText, optionImages);
         maxOptionHeight = Math.max(maxOptionHeight, optionCellHeight);
     }
     maxRowHeightInPoints = Math.max(maxRowHeightInPoints, maxOptionHeight);
