@@ -24,95 +24,130 @@ const parseHtmlToQuestions = (html: string): Question[] => {
 
     const container = document.createElement('div');
     container.innerHTML = html;
-    
+
     let currentQuestion: Question | null = null;
-    
-    const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]\s*/i;
+    let lastOptionMarker: string | null = null;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
-            currentQuestion.questionText = currentQuestion.questionText.trim();
-            for (const key in currentQuestion.options) {
-                currentQuestion.options[key] = currentQuestion.options[key]?.trim() || '';
-            }
             questions.push(currentQuestion);
             currentQuestion = null;
+            lastOptionMarker = null;
         }
     };
-    
+
     const paragraphs = Array.from(container.children);
 
     for (const p of paragraphs) {
         if (!(p instanceof HTMLElement)) continue;
 
-        let pText = p.textContent?.trim() || '';
+        const pText = p.textContent?.trim() || '';
+        const pHTML = p.innerHTML;
+        const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]\s*/i;
+        const optionMarkerRegex = /\(([A-D])\)/g;
+
         const questionMatch = pText.match(questionStartRegex);
 
         if (questionMatch) {
             finalizeQuestion();
             currentQuestion = {
-                questionText: pText.replace(questionStartRegex, ''),
+                questionText: pText.replace(questionStartRegex, '').trim(),
                 options: {},
                 images: [],
             };
-            const pImages = Array.from(p.querySelectorAll('img'));
-            pImages.forEach(img => {
-                currentQuestion?.images.push({ data: img.src, in: 'question' });
+            const imagesInQuestion = Array.from(p.querySelectorAll('img'));
+            imagesInQuestion.forEach(img => {
+                currentQuestion!.images.push({ data: img.src, in: 'question' });
             });
+            // If the question text is only the number, the actual text is on the next line
+            if (!currentQuestion.questionText) {
+                // The next element will be treated as question content
+                continue; 
+            }
         } else if (currentQuestion) {
-            const optionMarkerRegex = /\(([A-D])\)/;
-            const fullOptionRegex = /(\([A-D]\))/g;
-            let tempDiv = document.createElement('div');
-            tempDiv.innerHTML = p.innerHTML;
-            
-            // This regex will split the content by option markers, but keep the markers
-            const contentParts = tempDiv.innerHTML.split(fullOptionRegex).filter(part => part.trim() !== '');
+            const markers = pHTML.match(optionMarkerRegex);
+            const images = Array.from(p.querySelectorAll('img'));
 
-            let hasOptionInParagraph = false;
-            if (p.innerHTML.match(fullOptionRegex)) {
-                hasOptionInParagraph = true;
-                let currentOptionLetter: string | null = null;
-
-                for (let i = 0; i < contentParts.length; i++) {
-                    const part = contentParts[i];
-                    const trimmedPart = part.trim();
-                    const optionMatch = trimmedPart.match(optionMarkerRegex);
-
-                    if (optionMatch && trimmedPart.length <= 4) { // It's a marker like '(A)'
-                        currentOptionLetter = optionMatch[1].toUpperCase();
-                        if (currentQuestion.options[currentOptionLetter] === undefined) {
-                            currentQuestion.options[currentOptionLetter] = '';
+            if (markers) {
+                // This paragraph contains one or more option markers
+                let contentParts = pHTML.split(optionMarkerRegex);
+                contentParts = contentParts.filter(part => part !== '');
+                
+                let partIndex = 0;
+                while (partIndex < contentParts.length) {
+                    const currentPart = contentParts[partIndex];
+                    if (currentPart.length === 1 && 'ABCD'.includes(currentPart)) { // This is a marker
+                        const optionLetter = currentPart;
+                        lastOptionMarker = optionLetter;
+                        if (currentQuestion.options[optionLetter] === undefined) {
+                            currentQuestion.options[optionLetter] = '';
                         }
-                    } else if (currentOptionLetter) { // It's content for the last found marker
-                        const partDiv = document.createElement('div');
-                        partDiv.innerHTML = trimmedPart;
-                        const partText = (partDiv.textContent || '').trim();
-                        const partImages = Array.from(partDiv.querySelectorAll('img'));
+                        partIndex++;
                         
-                        if(partText) {
-                            currentQuestion.options[currentOptionLetter] += (currentQuestion.options[currentOptionLetter] ? ' ' : '') + partText;
-                        }
-                        partImages.forEach(img => {
-                            currentQuestion!.images.push({ data: img.src, in: `option${currentOptionLetter}` });
-                        });
+                        // The content for this option is in the next part
+                        if(partIndex < contentParts.length) {
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = contentParts[partIndex];
+                            
+                            const textContent = (tempDiv.textContent || '').trim();
+                            const imagesInPart = Array.from(tempDiv.querySelectorAll('img'));
 
-                        // If an option is just an image, sometimes it appears as (B) then <img> in the next part
-                        if (partImages.length > 0 && !partText) {
-                             currentQuestion.options[currentOptionLetter] = currentQuestion.options[currentOptionLetter] || ''; // ensure option exists
+                            if (textContent) {
+                                currentQuestion.options[optionLetter] += (currentQuestion.options[optionLetter] ? ' ' : '') + textContent;
+                            }
+                            imagesInPart.forEach(img => {
+                                currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
+                            });
+                             // If it was just an image, ensure the option exists
+                            if (imagesInPart.length > 0 && !textContent) {
+                                currentQuestion.options[optionLetter] = currentQuestion.options[optionLetter] || '';
+                            }
                         }
+                        partIndex++;
+                    } else { // This is content before the first marker in this paragraph
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = currentPart;
+                        const textContent = (tempDiv.textContent || '').trim();
+                        const imagesInPart = Array.from(tempDiv.querySelectorAll('img'));
+
+                        if (lastOptionMarker) { // Append to the last seen option
+                           if (textContent) currentQuestion.options[lastOptionMarker] += (currentQuestion.options[lastOptionMarker] ? '\n' : '') + textContent;
+                           imagesInPart.forEach(img => currentQuestion!.images.push({ data: img.src, in: `option${lastOptionMarker}` }));
+                        } else { // Append to question text
+                           if (textContent) currentQuestion.questionText += '\n' + textContent;
+                           imagesInPart.forEach(img => currentQuestion!.images.push({ data: img.src, in: 'question' }));
+                        }
+                        partIndex++;
                     }
                 }
-            }
+            } else {
+                 // This paragraph does not contain an option marker
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = pHTML;
+                const textContent = (tempDiv.textContent || '').trim();
+                const imagesInP = Array.from(tempDiv.querySelectorAll('img'));
 
-            if (!hasOptionInParagraph) {
-                // If it's just text or text with images, append to question
-                if (pText) {
-                    currentQuestion.questionText += `\n${pText}`;
+                if (lastOptionMarker) {
+                    // We are continuing an option from a previous line
+                    if (textContent) {
+                        currentQuestion.options[lastOptionMarker] += (currentQuestion.options[lastOptionMarker] ? '\n' : '') + textContent;
+                    }
+                    imagesInP.forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: `option${lastOptionMarker}` });
+                    });
+                     if (imagesInP.length > 0 && !textContent) {
+                        currentQuestion.options[lastOptionMarker] = currentQuestion.options[lastOptionMarker] || '';
+                    }
+
+                } else {
+                    // This is still part of the question
+                    if (textContent) {
+                        currentQuestion.questionText += '\n' + textContent;
+                    }
+                    imagesInP.forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: 'question' });
+                    });
                 }
-                const pImages = Array.from(p.querySelectorAll('img'));
-                pImages.forEach(img => {
-                    currentQuestion!.images.push({ data: img.src, in: 'question' });
-                });
             }
         }
     }
@@ -295,14 +330,16 @@ export const parseFile = async (file: File): Promise<Question[]> => {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
         
+        let combinedTextAndImages: { str: string, y: number, x: number }[] = [];
+
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
             const textContent = await page.getTextContent();
             const viewport = page.getViewport({ scale: 1.5 });
             const ops = await page.getOperatorList();
             
-            const imagePromises: Promise<any>[] = [];
-            let imageYCoords: { [key: string]: {y: number, x: number} } = {};
+            const imageYCoords: { [key: string]: {y: number, x: number} } = {};
+            const imagePromises: Promise<void>[] = [];
 
             for (let i = 0; i < ops.fnArray.length; i++) {
                 if (ops.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
@@ -320,8 +357,18 @@ export const parseFile = async (file: File): Promise<Question[]> => {
                         const ctx = canvas.getContext('2d');
                         if (ctx) {
                             const imgData = ctx.createImageData(img.width, img.height);
-                            if (img.data.length === img.width * img.height * 4) { // RGBA
-                                imgData.data.set(img.data);
+                            let data = img.data;
+                            if (img.kind === pdfjsLib.ImageKind.GRAYSCALE_1BPP) {
+                                const black = 0, white = 255;
+                                const dataBytes = (img.width + 7) >> 3;
+                                data = new Uint8ClampedArray(img.width * img.height * 4);
+                                let k = 0;
+                                for (let j = 0; j < img.height; j++) {
+                                    for (let bit = 0; bit < img.width; bit++) {
+                                        const val = (img.data[(j * dataBytes) + (bit >> 3)] >> (7 - (bit & 7))) & 1 ? black : white;
+                                        data[k++] = val; data[k++] = val; data[k++] = val; data[k++] = 255;
+                                    }
+                                }
                             } else if (img.data.length === img.width * img.height * 3) { // RGB
                                 const rgba = new Uint8ClampedArray(img.width * img.height * 4);
                                 for (let j = 0, k = 0; j < img.data.length; j += 3, k += 4) {
@@ -330,8 +377,9 @@ export const parseFile = async (file: File): Promise<Question[]> => {
                                     rgba[k + 2] = img.data[j + 2];
                                     rgba[k + 3] = 255;
                                 }
-                                imgData.data.set(rgba);
+                                data = rgba;
                             }
+                            imgData.data.set(data);
                             ctx.putImageData(imgData, 0, 0);
                             imageYCoords[canvas.toDataURL()] = { y, x };
                         }
@@ -350,30 +398,38 @@ export const parseFile = async (file: File): Promise<Question[]> => {
             Object.entries(imageYCoords).forEach(([imgData, coords]) => {
                 pageItems.push({str: `<img src="${imgData}" />`, y: coords.y, x: coords.x});
             });
-
-            pageItems.sort((a, b) => {
-                if (Math.abs(b.y - a.y) < 5) { // Line height threshold
-                    return a.x - b.x;
-                }
-                return b.y - a.y;
-            });
-
-            let currentLine = '';
-            let lastY = pageItems.length > 0 ? pageItems[0].y : null;
-
-            for (const item of pageItems) {
-                if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 10) { // New line threshold
-                    if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
-                    currentLine = '';
-                }
-                currentLine += item.str.includes('<img') ? item.str : ` ${item.str} `;
-                lastY = item.y;
-            }
-            if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
+            
+            // Adjust y-coordinates for page position
+            const pageOffset = (pdf.numPages - pageNum) * 1000;
+            pageItems.forEach(item => item.y += pageOffset);
+            combinedTextAndImages.push(...pageItems);
         }
+
+        combinedTextAndImages.sort((a, b) => {
+            if (Math.abs(b.y - a.y) < 5) { // Line height threshold
+                return a.x - b.x;
+            }
+            return b.y - a.y;
+        });
+
+        let currentLine = '';
+        let lastY = combinedTextAndImages.length > 0 ? combinedTextAndImages[0].y : null;
+
+        for (const item of combinedTextAndImages) {
+            if (item.y !== null && lastY !== null && Math.abs(item.y - lastY) > 10) { // New line threshold
+                if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
+                currentLine = '';
+            }
+            currentLine += item.str.includes('<img') ? item.str : ` ${item.str} `;
+            lastY = item.y;
+        }
+        if (currentLine.trim()) htmlContent += `<p>${currentLine.trim()}</p>`;
+
     } else {
         throw new Error("Unsupported file type");
     }
 
     return parseHtmlToQuestions(htmlContent);
 };
+
+    
