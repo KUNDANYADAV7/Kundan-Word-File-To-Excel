@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import FileUploader from "@/components/file-uploader";
-import { parseFile, generateExcel, Question } from "@/lib/converter";
+import { parseFile, generateExcel } from "@/lib/converter";
 import { useToast } from "@/hooks/use-toast";
 import { saveAs } from 'file-saver';
 

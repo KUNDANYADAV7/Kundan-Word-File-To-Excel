@@ -32,40 +32,26 @@ const parseHtmlToQuestions = (html: string): Question[] => {
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
-            currentQuestion.questionText = currentQuestion.questionText.trim();
+            currentQuestion.questionText = currentQuestion.questionText.replace(/\s+/g, ' ').trim();
             for (const key in currentQuestion.options) {
-                currentQuestion.options[key] = currentQuestion.options[key].trim();
+                currentQuestion.options[key] = currentQuestion.options[key].replace(/\s+/g, ' ').trim();
             }
             questions.push(currentQuestion);
         }
     };
-
+    
     const elements = Array.from(container.children);
 
     for (const el of elements) {
         if (!(el instanceof HTMLElement)) continue;
 
-        let content = el.innerHTML.trim();
+        const elHtml = el.innerHTML.trim();
         const textContent = (el.textContent || '').trim();
-
         const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s*/i;
-        const optionMarkerRegex = /\(([A-Z])\)/g;
 
-        // Check for new question
         if (questionStartRegex.test(textContent)) {
             finalizeQuestion();
-            const questionNumberMatch = textContent.match(questionStartRegex);
-            const questionNumber = questionNumberMatch![1];
-            
-            // Adjust content to be everything after the question number
-            const numberIndex = content.indexOf(questionNumber) + questionNumber.length;
-            content = content.substring(numberIndex).replace(/^[.)]?\s*/, '');
-
-            currentQuestion = {
-                questionText: '',
-                options: {},
-                images: [],
-            };
+            currentQuestion = { questionText: '', options: {}, images: [] };
             currentState = 'question';
             currentOptionKey = null;
         }
@@ -73,29 +59,45 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         if (!currentQuestion) continue;
 
         const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = content;
-        
+        tempDiv.innerHTML = elHtml;
         const allNodes = Array.from(tempDiv.childNodes);
         
+        let nodeTextContent = '';
+        allNodes.forEach(node => {
+            nodeTextContent += node.textContent || '';
+        });
+        nodeTextContent = nodeTextContent.trim();
+        
+        // Remove question number from the start of the text content
+        if (currentState === 'question') {
+            nodeTextContent = nodeTextContent.replace(questionStartRegex, '');
+        }
+
+        const optionMarkerRegex = /\(([A-Z])\)/g;
+        let lastIndex = 0;
+        let foundOptionInNode = false;
+
+        const processText = (text: string) => {
+            if (!text) return;
+            if (currentState === 'option' && currentOptionKey) {
+                currentQuestion!.options[currentOptionKey] += ` ${text}`;
+            } else {
+                currentQuestion!.questionText += ` ${text}`;
+            }
+        };
+
         for (const node of allNodes) {
              if (node.nodeType === Node.TEXT_NODE) {
-                const nodeText = (node.textContent || '').trim();
-                const markers = [...nodeText.matchAll(optionMarkerRegex)];
+                const text = (node.textContent || '');
+                let lastIndex = 0;
+                const markers = [...text.matchAll(optionMarkerRegex)];
 
                 if (markers.length > 0) {
-                    let lastIndex = 0;
+                    foundOptionInNode = true;
                     for (const marker of markers) {
-                        // Text before the marker
-                        const textBefore = nodeText.substring(lastIndex, marker.index).trim();
-                        if (textBefore) {
-                            if (currentState === 'option' && currentOptionKey) {
-                                currentQuestion.options[currentOptionKey] += ` ${textBefore}`;
-                            } else {
-                                currentQuestion.questionText += ` ${textBefore}`;
-                            }
-                        }
+                        const textBefore = text.substring(lastIndex, marker.index).trim();
+                        processText(textBefore);
 
-                        // We found an option marker, change state
                         currentState = 'option';
                         currentOptionKey = marker[1];
                         if (!currentQuestion.options[currentOptionKey]) {
@@ -103,30 +105,31 @@ const parseHtmlToQuestions = (html: string): Question[] => {
                         }
                         lastIndex = marker.index! + marker[0].length;
                     }
-                    // Text after the last marker
-                    const textAfter = nodeText.substring(lastIndex).trim();
-                    if (textAfter) {
-                        if (currentState === 'option' && currentOptionKey) {
-                            currentQuestion.options[currentOptionKey] += ` ${textAfter}`;
-                        }
-                    }
-                } else if (nodeText) {
-                     // No markers, just text, so append to current state
-                     if (currentState === 'option' && currentOptionKey) {
-                         currentQuestion.options[currentOptionKey] += ` ${nodeText}`;
-                     } else {
-                         currentQuestion.questionText += ` ${nodeText}`;
-                     }
+                    const textAfter = text.substring(lastIndex).trim();
+                    processText(textAfter);
+                } else {
+                    processText(text);
                 }
-            } else if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === 'IMG') {
-                const img = node as HTMLImageElement;
-                const target = currentState === 'option' && currentOptionKey ? `option${currentOptionKey}` : 'question';
-                currentQuestion.images.push({ data: img.src, in: target });
-                // If we are in an option state and it has no text yet, create it.
-                if (currentState === 'option' && currentOptionKey && !currentQuestion.options[currentOptionKey]) {
+             } else if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === 'IMG') {
+                 const img = node as HTMLImageElement;
+
+                // Edge case: if an image is inside a paragraph that also contains an option marker,
+                // we need to determine if the image comes before or after the marker.
+                const markersInParent = [...(el.textContent || '').matchAll(optionMarkerRegex)];
+                if (markersInParent.length > 0) {
+                    // This is a rough approximation: if the image appears, and there are markers,
+                    // we check if we've already switched to an option state in this element.
+                    // If not, it belongs to the question. If yes, it belongs to the latest option.
+                } else if (currentOptionKey && currentState === 'option' && Object.keys(currentQuestion.options).includes(currentOptionKey)) {
+                     // If we are solidly in an option state from a previous element.
+                }
+
+                 const target = currentState === 'option' && currentOptionKey ? `option${currentOptionKey}` : 'question';
+                 currentQuestion.images.push({ data: img.src, in: target });
+                 if (currentState === 'option' && currentOptionKey && !currentQuestion.options[currentOptionKey]) {
                     currentQuestion.options[currentOptionKey] = '';
-                }
-            }
+                 }
+             }
         }
     }
 
