@@ -54,13 +54,16 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         images: [],
       };
 
-      // Process question images
+      // Process question images that are in the same <p> as the question text
       el.querySelectorAll('img').forEach(img => {
-        if(img.src) currentQuestion.images.push({ data: img.src, in: 'question' });
+        if(img.src && !currentQuestion.images.some(existing => existing.data === img.src)) {
+            currentQuestion.images.push({ data: img.src, in: 'question' });
+        }
       });
 
       let j = i + 1;
       let lastOptionLetter: string | null = null;
+      let isOptionLine = false;
 
       while (j < children.length) {
         const nextEl = children[j] as HTMLElement;
@@ -72,38 +75,50 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         
         const optionRegex = /\s*\(([A-D])\)\s*/i;
 
-        // Process images first and associate them correctly
-        nextEl.querySelectorAll('img').forEach(img => {
-            if (img.src && !currentQuestion.images.some(existingImg => existingImg.data === img.src)) {
-                const parentText = nextEl.textContent || '';
-                const optionMatch = parentText.match(optionRegex);
-                if (optionMatch && optionMatch[1]) {
-                    const letter = optionMatch[1].toUpperCase();
-                    currentQuestion.images.push({ data: img.src, in: `option${letter}` });
-                } else {
-                    currentQuestion.images.push({ data: img.src, in: 'question' });
+        // Process images first, and associate them correctly
+        const imagesInElement = Array.from(nextEl.querySelectorAll('img'));
+        if (imagesInElement.length > 0) {
+            const parentText = nextEl.textContent || '';
+            const optionMatchInParent = parentText.match(optionRegex);
+            
+            imagesInElement.forEach(img => {
+                if (img.src && !currentQuestion.images.some(existingImg => existingImg.data === img.src)) {
+                    if (optionMatchInParent && optionMatchInParent[1]) {
+                        const letter = optionMatchInParent[1].toUpperCase();
+                        currentQuestion.images.push({ data: img.src, in: `option${letter}` });
+                    } else if(lastOptionLetter) {
+                        currentQuestion.images.push({ data: img.src, in: `option${lastOptionLetter}` });
+                    } else {
+                        currentQuestion.images.push({ data: img.src, in: 'question' });
+                    }
                 }
-            }
-        });
+            });
+        }
 
         // Process text content
-        if (nextEl.tagName === 'P' && optionRegex.test(nextText)) {
+        if (nextEl.tagName === 'P') {
           const parts = nextText.split(/\s*(?=\([B-D]\))/i);
+          let containsOption = false;
           parts.forEach(part => {
               const optionMatch = part.match(optionRegex);
               if (optionMatch && optionMatch[1]) {
+                  containsOption = true;
                   const letter = optionMatch[1].toUpperCase();
                   const optionText = part.replace(optionRegex, '').trim();
                   currentQuestion.options[letter] = (currentQuestion.options[letter] || '') + optionText;
                   lastOptionLetter = letter;
               }
           });
-        } else if (nextText && lastOptionLetter) {
-          // Append to the last identified option if it's not a new option line
-          currentQuestion.options[lastOptionLetter] += '\n' + nextText;
-        } else if (nextText) {
-          // Append to question text if it appears before any options
-          currentQuestion.questionText += '\n' + nextText;
+          
+          if(!containsOption && nextText) { // If it's not an option line but has text
+            if(lastOptionLetter) {
+                 // Append to the last identified option if it's not a new option line
+                currentQuestion.options[lastOptionLetter] += '\n' + nextText;
+            } else {
+                // Append to question text if it appears before any options
+                currentQuestion.questionText += '\n' + nextText;
+            }
+          }
         }
         
         j++;
@@ -331,53 +346,76 @@ export const convertPdfToExcel = async (file: File) => {
     }
 
     const questions: Question[] = [];
-    const lines = fullText.split('\n').filter(line => line.trim().length > 0);
-    let i = 0;
+    // A more robust regex to find questions, allowing for variations in spacing.
+    const questionRegex = /^(?:Q|Question)?\s*(\d+)[.)\s]/i;
+    // Split by what looks like a question marker, but keep the delimiter
+    const potentialQuestions = fullText.split(new RegExp(`(${questionRegex.source})`, 'gi'));
 
-    while (i < lines.length) {
-        const line = lines[i].trim();
-        const questionRegex = /^(?:Q|Question)?\s*(\d+)[.)]/;
-        const match = line.match(questionRegex);
+    let questionBuffer: string[] = [];
 
-        if (match) {
-            let questionText = line.replace(questionRegex, '').trim();
+    for (const part of potentialQuestions) {
+        if (questionRegex.test(part)) {
+            if (questionBuffer.length > 0) {
+                // Process the previous question
+                const questionBlock = questionBuffer.join('\n');
+                const [questionText, ...optionsPart] = questionBlock.split(/\s*\([A-D]\)/i);
+
+                if (questionText) {
+                    const currentQuestion: Question = {
+                        questionText: questionText.replace(questionRegex, '').trim(),
+                        options: {},
+                        images: [],
+                    };
+                    const optionLines = questionBlock.match(/\s*\([A-D]\).*?(?=\s*\([A-D]\)|$)/gis) || [];
+                    optionLines.forEach(line => {
+                        const optionMatch = line.match(/\s*\(([A-D])\)/i);
+                        if(optionMatch && optionMatch[1]){
+                            const letter = optionMatch[1].toUpperCase();
+                            const optionText = line.replace(optionMatch[0], '').trim();
+                            currentQuestion.options[letter] = optionText;
+                        }
+                    });
+
+                    if(Object.keys(currentQuestion.options).length > 0) {
+                        questions.push(currentQuestion);
+                    }
+                }
+            }
+            questionBuffer = [part];
+        } else {
+            questionBuffer.push(part);
+        }
+    }
+    // Process the last question in the buffer
+    if(questionBuffer.length > 0) {
+        const questionBlock = questionBuffer.join('\n');
+        const match = questionBlock.match(questionRegex);
+        const textAfterMarker = match ? questionBlock.substring(match[0].length) : questionBlock;
+        
+        const optionLines = textAfterMarker.match(/\s*\([A-D]\).*?(?=\s*\([A-D]\)|$)/gis) || [];
+        const firstOptionIndex = textAfterMarker.indexOf(optionLines[0] || '');
+
+        if (match && optionLines.length > 0 && firstOptionIndex !== -1) {
+            const questionText = textAfterMarker.substring(0, firstOptionIndex).trim();
             const currentQuestion: Question = {
-                questionText: '',
+                questionText: questionText,
                 options: {},
                 images: [],
             };
             
-            let nextIndex = i + 1;
-            while(nextIndex < lines.length && !lines[nextIndex].trim().match(questionRegex) && !lines[nextIndex].trim().match(/^\s*\([A-D]\)/i)) {
-                questionText += ' ' + lines[nextIndex].trim();
-                nextIndex++;
-            }
-            currentQuestion.questionText = questionText;
-
-            i = nextIndex;
-            
-            let lastOptionLetter: string | null = null;
-            while(i < lines.length && !lines[i].trim().match(questionRegex)) {
-                const optionLine = lines[i].trim();
-                const optionRegex = /^\s*\(([A-D]\))/i;
-                const optionMatch = optionLine.match(optionRegex);
-                if (optionMatch) {
+            optionLines.forEach(line => {
+                const optionMatch = line.match(/\s*\(([A-D])\)/i);
+                if(optionMatch && optionMatch[1]){
                     const letter = optionMatch[1].toUpperCase();
-                    const text = optionLine.replace(optionRegex, '').trim();
-                    currentQuestion.options[letter] = (currentQuestion.options[letter] || '') + text;
-                    lastOptionLetter = letter;
-                } else if (lastOptionLetter) {
-                    currentQuestion.options[lastOptionLetter] += ' ' + optionLine;
+                    const optionText = line.replace(optionMatch[0], '').trim();
+                    currentQuestion.options[letter] = optionText;
                 }
-                i++;
+            });
+
+            if (Object.keys(currentQuestion.options).length > 0) {
+                questions.push(currentQuestion);
             }
-            
-            if (currentQuestion.questionText && Object.keys(currentQuestion.options).length > 0) {
-                 questions.push(currentQuestion);
-            }
-            continue;
         }
-        i++;
     }
 
     await generateExcelFromQuestions(questions, file.name);
