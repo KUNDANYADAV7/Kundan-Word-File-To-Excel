@@ -70,10 +70,9 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         }
 
         const optionRegex = /\s*\(([A-D])\)\s*/i;
-        
-        let isOptionLine = false;
-        if(nextEl.tagName === 'P' && optionRegex.test(nextText)) {
-          isOptionLine = true;
+        const isOptionLine = nextEl.tagName === 'P' && optionRegex.test(nextText);
+
+        if (isOptionLine) {
           const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
           for(const opt of sameLineOptions) {
             const optionMatch = opt.match(optionRegex);
