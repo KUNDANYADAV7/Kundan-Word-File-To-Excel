@@ -61,7 +61,6 @@ export default function Home() {
       if (!file) return false;
 
       setIsProcessing(true);
-      setIsPreviewing(true);
       
       try {
         const parsedQuestions = await parseFile(file);
@@ -96,13 +95,12 @@ export default function Home() {
         return false;
       } finally {
         setIsProcessing(false);
-        setIsPreviewing(false);
       }
   }
 
   const handleGeneratePreview = async () => {
     if (!file) return;
-
+    setIsPreviewing(true);
     if (questions) {
         setShowPreview(true);
     } else {
@@ -111,9 +109,11 @@ export default function Home() {
             setShowPreview(true);
         }
     }
+    setIsPreviewing(false);
   };
 
   const handleDownload = async () => {
+    setIsDownloading(true);
     let currentQuestions = questions;
     if (!currentQuestions) {
         const success = await processAndSetQuestions();
@@ -123,27 +123,30 @@ export default function Home() {
                 title: "Processing failed",
                 description: "Cannot download file because the document could not be parsed.",
             });
+            setIsDownloading(false);
             return;
         }
-        // Need to get the freshly set questions
-        // A state update may not be synchronous, so we re-call parseFile, which is cached implicitly by state logic
-        currentQuestions = await parseFile(file); 
+        // This is a bit of a hack. We need to get the questions that were just set.
+        // Since setState is async, we can't rely on `questions` being available immediately.
+        // Instead, we'll call parseFile again.
+        if (file) {
+          currentQuestions = await parseFile(file);
+        }
     }
 
-    if (!currentQuestions) {
+    if (!currentQuestions || currentQuestions.length === 0) {
          toast({
             variant: "destructive",
             title: "No data to download",
-            description: "Please upload and process a file first.",
+            description: "Could not find any questions to export.",
         });
+        setIsDownloading(false);
         return;
     }
     
-    setIsProcessing(true);
-    setIsDownloading(true);
     try {
         const excelBlob = await generateExcel(currentQuestions);
-        saveAs(excelBlob, `${file.name.replace(/\.(docx|pdf)$/, '')}.xlsx`);
+        saveAs(excelBlob, `${file?.name.replace(/\.(docx|pdf)$/, '') || 'download'}.xlsx`);
         toast({
           title: "Download Successful!",
           description: "Your Excel file has been downloaded.",
@@ -159,7 +162,6 @@ export default function Home() {
             description: `Could not generate the Excel file. ${errorMessage}`,
         });
     } finally {
-        setIsProcessing(false);
         setIsDownloading(false);
     }
   };
@@ -197,7 +199,7 @@ export default function Home() {
                     className="w-full sm:w-1/2 font-bold text-lg py-6 bg-accent text-accent-foreground hover:bg-accent/90 focus-visible:ring-accent-foreground/50"
                     size="lg"
                     onClick={handleGeneratePreview}
-                    disabled={isProcessing}
+                    disabled={isProcessing || isDownloading || isPreviewing}
                 >
                     {isPreviewing ? (
                         <>
@@ -215,7 +217,7 @@ export default function Home() {
                     className="w-full sm:w-1/2 font-bold text-lg py-6"
                     size="lg"
                     onClick={handleDownload}
-                    disabled={isProcessing}
+                    disabled={isProcessing || isDownloading || isPreviewing}
                 >
                    {isDownloading ? (
                         <>

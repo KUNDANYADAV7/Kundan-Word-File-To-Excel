@@ -27,30 +27,21 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     container.innerHTML = html;
 
     let currentQuestion: Question | null = null;
-    let lastProcessedElement: 'question' | 'option' | null = null;
+    let lastProcessedElement: 'question' | 'option' = 'question';
     let lastOptionKey: string | null = null;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
-            // Clean up empty options that might have been created
-            for (const key in currentQuestion.options) {
-                if (currentQuestion.options[key].trim() === '' && !currentQuestion.images.some(img => img.in === `option${key}`)) {
-                    delete currentQuestion.options[key];
-                }
-            }
             questions.push(currentQuestion);
-            currentQuestion = null;
-            lastProcessedElement = null;
-            lastOptionKey = null;
         }
     };
-    
+
     const paragraphs = Array.from(container.children);
 
     for (const p of paragraphs) {
         if (!(p instanceof HTMLElement)) continue;
 
-        let pText = p.textContent?.trim() || '';
+        const pText = (p.textContent || '').trim();
         const pHTML = p.innerHTML;
 
         const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s*/i;
@@ -59,101 +50,121 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         if (questionMatch) {
             finalizeQuestion();
             const questionNumber = questionMatch[1];
+            let questionText = pText.substring(questionMatch[0].length).trim();
+            
             currentQuestion = {
-                questionText: pText.substring(pText.indexOf(questionNumber) + questionNumber.length).replace(/^[.)]?\s*/, ''),
+                questionText: "",
                 options: {},
                 images: [],
             };
             
-            const imagesInP = Array.from(p.querySelectorAll('img'));
-            imagesInP.forEach(img => {
-                const src = img.src;
-                if (!currentQuestion!.images.some(existingImg => existingImg.data === src)) {
-                    currentQuestion!.images.push({ data: src, in: 'question' });
-                }
-            });
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = pHTML.substring(pHTML.indexOf(questionNumber) + questionNumber.length).replace(/^[.)]?\s*/, '');
 
-            lastProcessedElement = 'question';
-            lastOptionKey = null;
+            const imagesInQuestionLine = Array.from(tempDiv.querySelectorAll('img'));
             
-            pText = pText.substring(questionMatch[0].length);
-        }
-
-        if (currentQuestion) {
             const optionMarkerRegex = /\(([A-Z])\)/g;
-            const markers = [...pHTML.matchAll(optionMarkerRegex)];
-            const imagesInParagraph = Array.from(p.querySelectorAll('img'));
+            const markers = [...tempDiv.innerHTML.matchAll(optionMarkerRegex)];
 
             if (markers.length > 0) {
-                 // Contains one or more option markers, e.g. "(A) ... (B) ..."
-                const segments = pHTML.split(optionMarkerRegex);
-                
-                let segmentIndex = 1;
+                // Question and options are on the same line
+                const parts = tempDiv.innerHTML.split(optionMarkerRegex);
+                currentQuestion.questionText = (document.createElement('div').innerHTML = parts[0]).textContent?.trim() || '';
+
+                let partIndex = 1;
                 for (const marker of markers) {
                     const optionLetter = marker[1];
                     lastOptionKey = optionLetter;
-                    lastProcessedElement = 'option';
+                    const contentPart = parts[partIndex + 1] || '';
+                    const contentDiv = document.createElement('div');
+                    contentDiv.innerHTML = contentPart;
                     
-                    if (!currentQuestion.options[optionLetter]) {
-                        currentQuestion.options[optionLetter] = '';
-                    }
-
-                    const contentSegment = segments[segmentIndex + 1];
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = contentSegment;
-
-                    const textContent = (tempDiv.textContent || '').trim();
-                    if (textContent) {
-                         currentQuestion.options[optionLetter] += (currentQuestion.options[optionLetter] ? ' ' : '') + textContent;
-                    }
-
-                    const imagesInSegment = Array.from(tempDiv.querySelectorAll('img'));
-                    imagesInSegment.forEach(img => {
-                        if (!currentQuestion!.images.some(existingImg => existingImg.data === img.src)) {
-                           currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
-                        }
+                    currentQuestion.options[optionLetter] = contentDiv.textContent?.trim() || '';
+                    
+                    Array.from(contentDiv.querySelectorAll('img')).forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
                     });
-
-                    // If an image was the only content, ensure the option is kept
-                    if (imagesInSegment.length > 0 && !textContent) {
-                        currentQuestion.options[optionLetter] = currentQuestion.options[optionLetter] || '';
+                     if (Array.from(contentDiv.querySelectorAll('img')).length > 0 && !currentQuestion.options[optionLetter]) {
+                        currentQuestion.options[optionLetter] = ''; // Ensure option exists
                     }
-                    segmentIndex += 2;
                 }
-                 // Handle content before the first marker in this paragraph
-                const initialContentDiv = document.createElement('div');
-                initialContentDiv.innerHTML = segments[0];
-                const initialText = (initialContentDiv.textContent || '').trim();
-                const initialImages = Array.from(initialContentDiv.querySelectorAll('img'));
+                 Array.from((document.createElement('div').innerHTML = parts[0]).querySelectorAll('img')).forEach(img => {
+                     currentQuestion!.images.push({ data: img.src, in: 'question' });
+                 });
 
-                if(lastProcessedElement === 'question' && initialText) {
-                    currentQuestion.questionText += '\n' + initialText;
+            } else {
+                 currentQuestion.questionText = tempDiv.textContent?.trim() || '';
+                 imagesInQuestionLine.forEach(img => {
+                    currentQuestion!.images.push({ data: img.src, in: 'question' });
+                 });
+            }
+            lastProcessedElement = 'question';
+            lastOptionKey = null;
+
+        } else if (currentQuestion) {
+            const optionMarkerRegex = /\(([A-Z])\)/g;
+            let markers = [...pHTML.matchAll(optionMarkerRegex)];
+            
+            if (markers.length > 0) {
+                const parts = pHTML.split(optionMarkerRegex);
+                let textBefore = (document.createElement('div').innerHTML = parts[0]).textContent?.trim() || '';
+                
+                if (textBefore && lastProcessedElement === 'option' && lastOptionKey) {
+                    currentQuestion.options[lastOptionKey] = (currentQuestion.options[lastOptionKey] || '') + '\n' + textBefore;
+                } else if(textBefore && lastProcessedElement === 'question'){
+                    currentQuestion.questionText += '\n' + textBefore;
                 }
-                initialImages.forEach(img => {
-                     if (!currentQuestion!.images.some(existingImg => existingImg.data === img.src)) {
-                         const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                         currentQuestion!.images.push({ data: img.src, in: target });
-                     }
+
+                Array.from((document.createElement('div').innerHTML = parts[0]).querySelectorAll('img')).forEach(img => {
+                    const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
+                    currentQuestion!.images.push({ data: img.src, in: target });
                 });
 
-            } else if (imagesInParagraph.length > 0 && pText.trim().length === 0) {
-                // This paragraph contains only images.
-                const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                 imagesInParagraph.forEach(img => {
-                     if (!currentQuestion!.images.some(existingImg => existingImg.data === img.src)) {
+
+                let partIndex = 1;
+                for (const marker of markers) {
+                    lastProcessedElement = 'option';
+                    const optionLetter = marker[1];
+                    lastOptionKey = optionLetter;
+                    
+                    const contentPart = parts[partIndex + 1] || '';
+                    const contentDiv = document.createElement('div');
+                    contentDiv.innerHTML = contentPart;
+
+                    currentQuestion.options[optionLetter] = (currentQuestion.options[optionLetter] || '') + (contentDiv.textContent?.trim() || '');
+                    
+                    const imagesInPart = Array.from(contentDiv.querySelectorAll('img'));
+                    imagesInPart.forEach(img => {
+                        currentQuestion!.images.push({ data: img.src, in: `option${optionLetter}` });
+                    });
+
+                    if (imagesInPart.length > 0 && !currentQuestion.options[optionLetter]) {
+                        currentQuestion.options[optionLetter] = ''; // Ensure option exists if only image
+                    }
+
+                    partIndex += 2;
+                }
+            } else {
+                // Continuation text or image-only paragraph
+                const images = Array.from(p.querySelectorAll('img'));
+                const text = p.textContent?.trim() || '';
+
+                if (text) {
+                     if (lastProcessedElement === 'question') {
+                        currentQuestion.questionText += '\n' + text;
+                    } else if (lastProcessedElement === 'option' && lastOptionKey) {
+                        currentQuestion.options[lastOptionKey] = (currentQuestion.options[lastOptionKey] || '') + '\n' + text;
+                    }
+                }
+                
+                if (images.length > 0) {
+                    images.forEach(img => {
+                        const target = lastOptionKey && lastProcessedElement === 'option' ? `option${lastOptionKey}` : 'question';
                         currentQuestion!.images.push({ data: img.src, in: target });
-                        // Ensure option exists if image is for it
-                        if(target.startsWith('option') && !currentQuestion!.options[lastOptionKey!]) {
-                           currentQuestion!.options[lastOptionKey!] = '';
+                        if(target.startsWith('option') && !currentQuestion!.options[lastOptionKey!]){
+                            currentQuestion!.options[lastOptionKey!] = '';
                         }
-                     }
-                 });
-            } else if (pText) {
-                // Continuation of previous text.
-                if (lastProcessedElement === 'question') {
-                     currentQuestion.questionText += '\n' + pText;
-                } else if (lastProcessedElement === 'option' && lastOptionKey) {
-                     currentQuestion.options[lastOptionKey] += '\n' + pText;
+                    });
                 }
             }
         }
