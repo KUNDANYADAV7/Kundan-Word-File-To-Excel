@@ -76,7 +76,7 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         if(nextEl.tagName === 'P' && optionRegex.test(nextText)) {
           isOptionLine = true;
           const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
-          for(const opt of sameLineLineOptions) {
+          for(const opt of sameLineOptions) {
             const optionMatch = opt.match(optionRegex);
             if(optionMatch && optionMatch[1]) {
               const letter = optionMatch[1].toUpperCase();
