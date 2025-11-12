@@ -338,34 +338,44 @@ export const convertPdfToExcel = async (file: File) => {
     }
 
     const questions: Question[] = [];
-    const questionRegex = /(?:Q|Question)?\s*(\d+[.)])([\s\S]*?)(?=(?:Q|Question)?\s*\d+[.)]|$)/g;
-    let match;
+    const lines = fullText.split('\n');
+    let currentQuestion: Question | null = null;
+    let currentOption = -1;
 
-    while ((match = questionRegex.exec(fullText)) !== null) {
-        let questionBlock = match[2];
+    const questionRegex = /^(?:Q|Question)?\s*\d+[.)]/;
+    const optionRegex = /^\s*\([A-D]\)/i;
 
-        const options: string[] = [];
-        const optionRegex = /\s*(\([A-D]\))\s*([\s\S]*?)(?=\s*\([A-D]\)|$)/gi;
-        
-        let firstOptionIndex = questionBlock.search(/\s*\([A-D]\)/i);
-        
-        let questionText = (firstOptionIndex !== -1 ? questionBlock.substring(0, firstOptionIndex) : questionBlock).trim();
-        let optionsBlock = firstOptionIndex !== -1 ? questionBlock.substring(firstOptionIndex) : "";
-
-        if (optionsBlock) {
-             let optionMatch;
-             while((optionMatch = optionRegex.exec(optionsBlock)) !== null) {
-                options.push(`${optionMatch[1]} ${optionMatch[2].trim()}`);
+    for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (questionRegex.test(trimmedLine)) {
+            if (currentQuestion && currentQuestion.options.length > 0) {
+                questions.push(currentQuestion);
+            }
+            currentQuestion = {
+                questionText: trimmedLine.replace(questionRegex, '').trim(),
+                options: [],
+                images: [],
+            };
+            currentOption = -1;
+        } else if (currentQuestion && optionRegex.test(trimmedLine)) {
+             const sameLineOptions = trimmedLine.split(/\s*(?=\([B-D]\))/i);
+              for(const opt of sameLineOptions) {
+                if(optionRegex.test(opt)) {
+                    currentQuestion.options.push(opt.trim());
+                }
+              }
+            currentOption = currentQuestion.options.length -1;
+        } else if (currentQuestion && trimmedLine) {
+            if (currentOption !== -1) {
+                currentQuestion.options[currentOption] += ' ' + trimmedLine;
+            } else {
+                currentQuestion.questionText += ' ' + trimmedLine;
             }
         }
-        
-        if (questionText && options.length > 0) {
-            questions.push({
-                questionText: questionText.replace(/\s+/g, ' ').trim(),
-                options: options,
-                images: [] // Image extraction from PDF is complex and not supported in this text-based approach
-            });
-        }
+    }
+
+    if (currentQuestion && currentQuestion.options.length > 0) {
+        questions.push(currentQuestion);
     }
 
     await generateExcelFromQuestions(questions, file.name);
