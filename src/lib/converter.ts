@@ -82,10 +82,14 @@ const parseHtmlToQuestions = (html: string): Question[] => {
             imagesInElement.forEach(img => {
                 if (img.src && !currentQuestion.images.some(existingImg => existingImg.data === img.src)) {
                     let imagePlaced = false;
-                    const optionParts = parentTextForImage.split(/\s*(?=\([A-D]\))/i);
+                    const optionParts = nextEl.innerHTML.split(/\s*(?=\([A-D]\))/i);
                     for (const part of optionParts) {
-                        const match = part.match(optionRegex);
-                        if (match && part.includes(img.outerHTML)) {
+                        const tempPartDiv = document.createElement('div');
+                        tempPartDiv.innerHTML = part;
+                        const partText = tempPartDiv.textContent || '';
+                        const match = partText.match(optionRegex);
+
+                        if (match && tempPartDiv.querySelector('img')) {
                             const letter = match[1].toUpperCase();
                             currentQuestion.images.push({ data: img.src, in: `option${letter}` });
                             imagePlaced = true;
@@ -347,59 +351,25 @@ export const convertDocxToExcel = async (file: File) => {
 export const convertPdfToExcel = async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
-    const numPages = pdf.numPages;
     
-    let fullHtml = '';
-    for (let i = 1; i <= numPages; i++) {
+    let htmlContent = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        fullHtml += textContent.items.map(item => ('str' in item ? item.str : '')).join(' ') + '\n';
-    }
-
-    const questions: Question[] = [];
-    const questionRegex = /(?:Q|Question)?\s*(\d+)[.)]/;
-    const lines = fullHtml.split('\n');
-
-    let currentQuestion: Question | null = null;
-    let lastOptionLetter: string | null = null;
-
-    for (const line of lines) {
-        const questionMatch = line.match(questionRegex);
-        if (questionMatch) {
-            if (currentQuestion) {
-                questions.push(currentQuestion);
+        let lastY = -1;
+        textContent.items.forEach(item => {
+            if ('str' in item) {
+                if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > 5) {
+                    htmlContent += '</p><p>';
+                }
+                htmlContent += item.str + ' ';
+                lastY = item.transform[5];
             }
-            currentQuestion = {
-                questionText: line.replace(questionRegex, '').trim(),
-                options: {},
-                images: [],
-            };
-            lastOptionLetter = null;
-        } else if (currentQuestion) {
-            const optionRegex = /^\s*\(([A-D])\)/i;
-            const optionMatch = line.match(optionRegex);
-            if (optionMatch) {
-                const letter = optionMatch[1].toUpperCase();
-                currentQuestion.options[letter] = (currentQuestion.options[letter] || '') + line.replace(optionRegex, '').trim();
-                lastOptionLetter = letter;
-            } else if (lastOptionLetter) {
-                currentQuestion.options[lastOptionLetter] += ' ' + line.trim();
-            } else {
-                currentQuestion.questionText += ' ' + line.trim();
-            }
-        }
-    }
-    if (currentQuestion) {
-        questions.push(currentQuestion);
-    }
-    
-    // Clean up options
-    questions.forEach(q => {
-        Object.keys(q.options).forEach(key => {
-            q.options[key] = q.options[key].replace(/\s+/g, ' ').trim();
         });
-        q.questionText = q.questionText.replace(/\s+/g, ' ').trim();
-    });
+        htmlContent += '</p>';
+    }
+
+    const questions = parseHtmlToQuestions(`<p>${htmlContent}</p>`);
 
     await generateExcelFromQuestions(questions, file.name);
 };
