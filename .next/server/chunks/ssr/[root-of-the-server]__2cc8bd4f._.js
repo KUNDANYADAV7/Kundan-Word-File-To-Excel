@@ -437,7 +437,10 @@ const parseHtmlToQuestions = (html)=>{
     if ("TURBOPACK compile-time truthy", 1) return questions;
     "TURBOPACK unreachable";
     const container = undefined;
+    // Pre-process HTML to handle superscripts and subscripts correctly
+    let processedHtml;
     let currentQuestion;
+    let lastOptionKey;
     const finalizeQuestion = undefined;
     const elements = undefined;
     const el = undefined;
@@ -607,7 +610,7 @@ const generateExcel = async (questions)=>{
                             const lastImage = worksheet.media[worksheet.media.length - 1];
                             if (lastImage && lastImage.range) {
                                 lastImage.range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
-                                lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
+                                lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_to_EMUS;
                             }
                         }
                     } catch (e) {

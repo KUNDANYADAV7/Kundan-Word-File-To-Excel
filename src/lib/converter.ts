@@ -24,28 +24,26 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     if (typeof window === 'undefined') return questions;
 
     const container = document.createElement('div');
-    container.innerHTML = html;
-
-    // First pass: Handle superscripts, subscripts, and special characters
-    container.innerHTML = container.innerHTML.replace(/<sup>(.*?)<\/sup>/g, (match, content) => {
-        const superscripts: { [key: string]: string } = {
-            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻'
-        };
+    
+    // Pre-process HTML to handle superscripts and subscripts correctly
+    let processedHtml = html.replace(/<sup>(.*?)<\/sup>/g, (match, content) => {
+        const superscripts: { [key: string]: string } = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻' };
         return content.split('').map((char: string) => superscripts[char] || char).join('');
     }).replace(/<sub>(.*?)<\/sub>/g, (match, content) => {
-        const subscripts: { [key: string]: string } = {
-            '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋'
-        };
+        const subscripts: { [key: string]: string } = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋' };
         return content.split('').map((char: string) => subscripts[char] || char).join('');
     });
 
+    container.innerHTML = processedHtml;
 
     let currentQuestion: Question | null = null;
+    let lastOptionKey: string | null = null;
 
     const finalizeQuestion = () => {
         if (currentQuestion) {
             questions.push(currentQuestion);
             currentQuestion = null;
+            lastOptionKey = null;
         }
     };
     
@@ -54,114 +52,92 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     for (const el of elements) {
         if (!(el instanceof HTMLElement)) continue;
 
-        let processedHTML = el.innerHTML.replace(/<br\s*\/?>/gi, ' ');
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = processedHTML;
+        let content = el.innerHTML.trim();
+        const textContent = el.textContent?.trim() || '';
 
-        const allChildNodes = Array.from(tempDiv.childNodes);
-        
+        // Regex to find question number at the start of a paragraph
         const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s*/i;
+        const isNewQuestion = questionStartRegex.test(textContent);
 
-        const processNodesRecursive = (nodes: ChildNode[], state: { isNewQuestion: boolean }) => {
-            for (const node of nodes) {
-                if (node.nodeType === Node.TEXT_NODE) {
-                    let textContent = (node.textContent || '').trim();
-                    if (!textContent) continue;
+        if (isNewQuestion) {
+            finalizeQuestion();
+            const questionNumberMatch = textContent.match(questionStartRegex);
+            const questionText = questionNumberMatch ? textContent.substring(questionNumberMatch[0].length).trim() : textContent;
+            
+            currentQuestion = { questionText: '', options: {}, images: [] };
+            lastOptionKey = null;
 
-                    if (state.isNewQuestion) {
-                        textContent = textContent.replace(questionStartRegex, '').trim();
-                        state.isNewQuestion = false;
-                    }
+            // Use a temporary div to process the innerHTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = content;
+            
+            // Remove the question number part from the content
+            const qNumNode = tempDiv.firstChild;
+            if (qNumNode && qNumNode.textContent) {
+                qNumNode.textContent = qNumNode.textContent.replace(questionStartRegex, '');
+            }
+            content = tempDiv.innerHTML;
+        }
+        
+        if (!currentQuestion) continue;
 
-                    const optionMarkerRegex = /\(([A-Z])\)/g;
-                    let lastIndex = 0;
-                    let match;
-                    
-                    while ((match = optionMarkerRegex.exec(textContent)) !== null) {
-                        const textBefore = textContent.substring(lastIndex, match.index).trim();
-                        if (textBefore && currentQuestion) {
-                           currentQuestion.questionText += ` ${textBefore}`;
-                        }
-                        
-                        finalizeQuestion();
-                        const optionKey = match[1];
-                        currentQuestion = { questionText: '', options: { [optionKey]: '' }, images: [] };
-                        
-                        lastIndex = optionMarkerRegex.lastIndex;
-                    }
+        // Process the content of the element (can contain text and images)
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = content;
 
-                    const remainingText = textContent.substring(lastIndex).trim();
-                    if(remainingText && currentQuestion) {
-                        const lastOptionKey = Object.keys(currentQuestion.options).pop();
-                        if(lastOptionKey) {
-                            currentQuestion.options[lastOptionKey] += ` ${remainingText}`;
+        Array.from(tempDiv.childNodes).forEach(node => {
+             if (node.nodeType === Node.TEXT_NODE) {
+                let text = node.textContent || '';
+                
+                // Regex to find option markers like (A), (B), etc.
+                const optionMarkerRegex = /\(([A-Z])\)/g;
+                let match;
+                let lastIndex = 0;
+
+                while ((match = optionMarkerRegex.exec(text)) !== null) {
+                    const textBefore = text.substring(lastIndex, match.index).trim();
+                    if (textBefore) {
+                        if (lastOptionKey && currentQuestion!.options[lastOptionKey] !== undefined) {
+                            currentQuestion!.options[lastOptionKey] += ` ${textBefore}`;
                         } else {
-                            currentQuestion.questionText += ` ${remainingText}`;
-                        }
-                    } else if (remainingText && !currentQuestion && questions.length > 0) {
-                        // This text belongs to the last option of the previous question
-                        const prevQuestion = questions[questions.length - 1];
-                        const lastOptionKey = Object.keys(prevQuestion.options).pop();
-                        if (lastOptionKey) {
-                            prevQuestion.options[lastOptionKey] += ` ${remainingText}`;
+                            currentQuestion!.questionText += ` ${textBefore}`;
                         }
                     }
+                    
+                    lastOptionKey = match[1];
+                    currentQuestion!.options[lastOptionKey] = '';
+                    lastIndex = optionMarkerRegex.lastIndex;
+                }
 
-                } else if (node.nodeType === Node.ELEMENT_NODE) {
-                    const elementNode = node as HTMLElement;
-                    if (elementNode.tagName === 'IMG') {
-                        if (!currentQuestion && questions.length > 0) {
-                           const prevQuestion = questions[questions.length - 1];
-                           const lastOptionKey = Object.keys(prevQuestion.options).pop();
-                           const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                           prevQuestion.images.push({ data: (elementNode as HTMLImageElement).src, in: target });
-                        } else if (currentQuestion) {
-                           const lastOptionKey = Object.keys(currentQuestion.options).pop();
-                           const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                           currentQuestion.images.push({ data: (elementNode as HTMLImageElement).src, in: target });
-                        }
+                const remainingText = text.substring(lastIndex).trim();
+                if (remainingText) {
+                    if (lastOptionKey && currentQuestion!.options[lastOptionKey] !== undefined) {
+                        currentQuestion!.options[lastOptionKey] += ` ${remainingText}`;
                     } else {
-                        processNodesRecursive(Array.from(elementNode.childNodes), state);
+                        currentQuestion!.questionText += ` ${remainingText}`;
                     }
                 }
+
+            } else if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === 'IMG') {
+                const imgSrc = (node as HTMLImageElement).src;
+                const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
+                currentQuestion!.images.push({ data: imgSrc, in: target });
             }
-        };
-        
-        let initialText = (el.textContent || '').trim();
-        const isNewQ = questionStartRegex.test(initialText);
-
-        if(isNewQ) {
-            finalizeQuestion();
-            const questionNumberMatch = initialText.match(questionStartRegex);
-            const questionText = questionNumberMatch ? initialText.substring(questionNumberMatch[0].length).trim() : initialText;
-
-            currentQuestion = {
-                questionText: questionText,
-                options: {},
-                images: []
-            };
-        }
-
-        let childProcessingState = { isNewQuestion: isNewQ };
-        processNodesRecursive(allChildNodes, childProcessingState);
+        });
     }
 
     finalizeQuestion();
 
-     // Final cleanup pass
+    // Final cleanup pass
     return questions.map(q => {
-        // Replace special unicode spaces and trim
-        q.questionText = q.questionText.replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').trim();
-        q.questionText = q.questionText.replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3');
-
-
+        q.questionText = q.questionText.replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3').trim();
         for (const key in q.options) {
-            q.options[key] = q.options[key].replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').trim();
-             q.options[key] = q.options[key].replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3');
+            q.options[key] = q.options[key].replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3').trim();
         }
         return q;
     });
 };
+
 
 const getBase64Image = (imgSrc: string): { extension: 'png' | 'jpeg', data: string } => {
     const extension = imgSrc.startsWith('data:image/jpeg') ? 'jpeg' : 'png';
@@ -284,7 +260,7 @@ export const generateExcel = async (questions: Question[]): Promise<Blob> => {
                     const lastImage = (worksheet as any).media[(worksheet as any).media.length - 1];
                     if (lastImage && lastImage.range) {
                       lastImage.range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
-                      lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
+                      lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_to_EMUS;
                     }
                   }
               } catch (e) { console.error("Could not add image", e); }
@@ -437,3 +413,5 @@ export const parseFile = async (file: File): Promise<Question[]> => {
     
     return parseHtmlToQuestions(htmlContent);
 };
+
+    

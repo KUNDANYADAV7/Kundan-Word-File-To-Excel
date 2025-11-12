@@ -364,9 +364,8 @@ const parseHtmlToQuestions = (html)=>{
         "TURBOPACK unreachable";
     }
     const container = document.createElement('div');
-    container.innerHTML = html;
-    // First pass: Handle superscripts, subscripts, and special characters
-    container.innerHTML = container.innerHTML.replace(/<sup>(.*?)<\/sup>/g, (match, content)=>{
+    // Pre-process HTML to handle superscripts and subscripts correctly
+    let processedHtml = html.replace(/<sup>(.*?)<\/sup>/g, (match, content)=>{
         const superscripts = {
             '0': '⁰',
             '1': '¹',
@@ -399,116 +398,92 @@ const parseHtmlToQuestions = (html)=>{
         };
         return content.split('').map((char)=>subscripts[char] || char).join('');
     });
+    container.innerHTML = processedHtml;
     let currentQuestion = null;
+    let lastOptionKey = null;
     const finalizeQuestion = ()=>{
         if (currentQuestion) {
             questions.push(currentQuestion);
             currentQuestion = null;
+            lastOptionKey = null;
         }
     };
     const elements = Array.from(container.children);
     for (const el of elements){
         if (!(el instanceof HTMLElement)) continue;
-        let processedHTML = el.innerHTML.replace(/<br\s*\/?>/gi, ' ');
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = processedHTML;
-        const allChildNodes = Array.from(tempDiv.childNodes);
+        let content = el.innerHTML.trim();
+        const textContent = el.textContent?.trim() || '';
+        // Regex to find question number at the start of a paragraph
         const questionStartRegex = /^(?:Q|Question)?\s*(\d+)[.)]?\s*/i;
-        const processNodesRecursive = (nodes, state)=>{
-            for (const node of nodes){
-                if (node.nodeType === Node.TEXT_NODE) {
-                    let textContent = (node.textContent || '').trim();
-                    if (!textContent) continue;
-                    if (state.isNewQuestion) {
-                        textContent = textContent.replace(questionStartRegex, '').trim();
-                        state.isNewQuestion = false;
-                    }
-                    const optionMarkerRegex = /\(([A-Z])\)/g;
-                    let lastIndex = 0;
-                    let match;
-                    while((match = optionMarkerRegex.exec(textContent)) !== null){
-                        const textBefore = textContent.substring(lastIndex, match.index).trim();
-                        if (textBefore && currentQuestion) {
-                            currentQuestion.questionText += ` ${textBefore}`;
-                        }
-                        finalizeQuestion();
-                        const optionKey = match[1];
-                        currentQuestion = {
-                            questionText: '',
-                            options: {
-                                [optionKey]: ''
-                            },
-                            images: []
-                        };
-                        lastIndex = optionMarkerRegex.lastIndex;
-                    }
-                    const remainingText = textContent.substring(lastIndex).trim();
-                    if (remainingText && currentQuestion) {
-                        const lastOptionKey = Object.keys(currentQuestion.options).pop();
-                        if (lastOptionKey) {
-                            currentQuestion.options[lastOptionKey] += ` ${remainingText}`;
-                        } else {
-                            currentQuestion.questionText += ` ${remainingText}`;
-                        }
-                    } else if (remainingText && !currentQuestion && questions.length > 0) {
-                        // This text belongs to the last option of the previous question
-                        const prevQuestion = questions[questions.length - 1];
-                        const lastOptionKey = Object.keys(prevQuestion.options).pop();
-                        if (lastOptionKey) {
-                            prevQuestion.options[lastOptionKey] += ` ${remainingText}`;
-                        }
-                    }
-                } else if (node.nodeType === Node.ELEMENT_NODE) {
-                    const elementNode = node;
-                    if (elementNode.tagName === 'IMG') {
-                        if (!currentQuestion && questions.length > 0) {
-                            const prevQuestion = questions[questions.length - 1];
-                            const lastOptionKey = Object.keys(prevQuestion.options).pop();
-                            const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                            prevQuestion.images.push({
-                                data: elementNode.src,
-                                in: target
-                            });
-                        } else if (currentQuestion) {
-                            const lastOptionKey = Object.keys(currentQuestion.options).pop();
-                            const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
-                            currentQuestion.images.push({
-                                data: elementNode.src,
-                                in: target
-                            });
-                        }
-                    } else {
-                        processNodesRecursive(Array.from(elementNode.childNodes), state);
-                    }
-                }
-            }
-        };
-        let initialText = (el.textContent || '').trim();
-        const isNewQ = questionStartRegex.test(initialText);
-        if (isNewQ) {
+        const isNewQuestion = questionStartRegex.test(textContent);
+        if (isNewQuestion) {
             finalizeQuestion();
-            const questionNumberMatch = initialText.match(questionStartRegex);
-            const questionText = questionNumberMatch ? initialText.substring(questionNumberMatch[0].length).trim() : initialText;
+            const questionNumberMatch = textContent.match(questionStartRegex);
+            const questionText = questionNumberMatch ? textContent.substring(questionNumberMatch[0].length).trim() : textContent;
             currentQuestion = {
-                questionText: questionText,
+                questionText: '',
                 options: {},
                 images: []
             };
+            lastOptionKey = null;
+            // Use a temporary div to process the innerHTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = content;
+            // Remove the question number part from the content
+            const qNumNode = tempDiv.firstChild;
+            if (qNumNode && qNumNode.textContent) {
+                qNumNode.textContent = qNumNode.textContent.replace(questionStartRegex, '');
+            }
+            content = tempDiv.innerHTML;
         }
-        let childProcessingState = {
-            isNewQuestion: isNewQ
-        };
-        processNodesRecursive(allChildNodes, childProcessingState);
+        if (!currentQuestion) continue;
+        // Process the content of the element (can contain text and images)
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = content;
+        Array.from(tempDiv.childNodes).forEach((node)=>{
+            if (node.nodeType === Node.TEXT_NODE) {
+                let text = node.textContent || '';
+                // Regex to find option markers like (A), (B), etc.
+                const optionMarkerRegex = /\(([A-Z])\)/g;
+                let match;
+                let lastIndex = 0;
+                while((match = optionMarkerRegex.exec(text)) !== null){
+                    const textBefore = text.substring(lastIndex, match.index).trim();
+                    if (textBefore) {
+                        if (lastOptionKey && currentQuestion.options[lastOptionKey] !== undefined) {
+                            currentQuestion.options[lastOptionKey] += ` ${textBefore}`;
+                        } else {
+                            currentQuestion.questionText += ` ${textBefore}`;
+                        }
+                    }
+                    lastOptionKey = match[1];
+                    currentQuestion.options[lastOptionKey] = '';
+                    lastIndex = optionMarkerRegex.lastIndex;
+                }
+                const remainingText = text.substring(lastIndex).trim();
+                if (remainingText) {
+                    if (lastOptionKey && currentQuestion.options[lastOptionKey] !== undefined) {
+                        currentQuestion.options[lastOptionKey] += ` ${remainingText}`;
+                    } else {
+                        currentQuestion.questionText += ` ${remainingText}`;
+                    }
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG') {
+                const imgSrc = node.src;
+                const target = lastOptionKey ? `option${lastOptionKey}` : 'question';
+                currentQuestion.images.push({
+                    data: imgSrc,
+                    in: target
+                });
+            }
+        });
     }
     finalizeQuestion();
     // Final cleanup pass
     return questions.map((q)=>{
-        // Replace special unicode spaces and trim
-        q.questionText = q.questionText.replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').trim();
-        q.questionText = q.questionText.replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3');
+        q.questionText = q.questionText.replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3').trim();
         for(const key in q.options){
-            q.options[key] = q.options[key].replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').trim();
-            q.options[key] = q.options[key].replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3');
+            q.options[key] = q.options[key].replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ').replace(/(\d+)\s*([°˚º])\s*([CF]?)/gi, '$1$2$3').trim();
         }
         return q;
     });
@@ -678,7 +653,7 @@ const generateExcel = async (questions)=>{
                             const lastImage = worksheet.media[worksheet.media.length - 1];
                             if (lastImage && lastImage.range) {
                                 lastImage.range.tl.rowOff = rowOffsetInPixels * PIXELS_TO_EMUS;
-                                lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_TO_EMUS;
+                                lastImage.range.tl.colOff = colOffsetInPixels * PIXELS_to_EMUS;
                             }
                         }
                     } catch (e) {
