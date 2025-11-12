@@ -34,6 +34,8 @@ const parseHtmlToQuestions = (html: string): Question[] => {
     tempDiv.querySelectorAll('sup').forEach(sup => {
       sup.textContent = '²';
     });
+    // Remove image tags from text content
+    tempDiv.querySelectorAll('img').forEach(img => img.remove());
     let text = tempDiv.textContent?.replace(/\s+/g, ' ').trim() || '';
     text = text.replace(/ deg/g, '°');
     return text;
@@ -68,9 +70,34 @@ const parseHtmlToQuestions = (html: string): Question[] => {
         if (nextEl.tagName === 'P' && questionStartRegex.test(nextText)) {
           break; 
         }
-
+        
         const optionRegex = /\s*\(([A-D])\)\s*/i;
         const isOptionLine = nextEl.tagName === 'P' && optionRegex.test(nextText);
+
+        const elImgs = nextEl.querySelectorAll('img');
+        elImgs.forEach(img => {
+            if (img.src && !currentQuestion.images.some(existingImg => existingImg.data === img.src)) {
+                let imagePlacedInOption = false;
+                if (isOptionLine) {
+                    const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
+                    for(const opt of sameLineOptions) {
+                        const optionMatch = opt.match(optionRegex);
+                        if(optionMatch && optionMatch[1]) {
+                           const letter = optionMatch[1].toUpperCase();
+                           // Heuristic: if image is in a P tag that contains an option, associate it.
+                           currentQuestion.images.push({ data: img.src, in: `option${letter}` });
+                           imagePlacedInOption = true;
+                           break; // Assume one image per option line for simplicity
+                        }
+                    }
+                }
+                
+                if (!imagePlacedInOption) {
+                    currentQuestion.images.push({ data: img.src, in: 'question' });
+                }
+            }
+        });
+
 
         if (isOptionLine) {
           const sameLineOptions = nextText.split(/\s*(?=\([B-D]\))/i);
@@ -90,21 +117,10 @@ const parseHtmlToQuestions = (html: string): Question[] => {
           }
         }
         
-        const elImgs = nextEl.querySelectorAll('img');
-        elImgs.forEach(img => {
-            if (img.src && !currentQuestion.images.some(existingImg => existingImg.data === img.src)) {
-                 if (lastOptionLetter && isOptionLine) {
-                    currentQuestion.images.push({ data: img.src, in: `option${lastOptionLetter}` });
-                } else {
-                    currentQuestion.images.push({ data: img.src, in: 'question' });
-                }
-            }
-        });
-
         j++;
       }
       
-      if (currentQuestion.questionText && Object.keys(currentQuestion.options).length > 0) {
+      if (currentQuestion.questionText || Object.keys(currentQuestion.options).length > 0) {
         questions.push(currentQuestion);
       }
       
